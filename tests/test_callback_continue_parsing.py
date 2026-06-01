@@ -5034,7 +5034,7 @@ class ReauthorizePhoneVerificationTests(unittest.TestCase):
         with patch.object(reauth.time, "time", side_effect=[1000, 1015, 1020]), \
              patch.object(reauth, "wait_for_code", side_effect=fake_wait), \
              patch.object(reauth, "_enter_login_email_otp_step", return_value={"ok": True, "status": 200, "final_url": "https://auth.openai.com/log-in/email-verification"}), \
-             patch.object(reauth, "_submit_login_email_otp_page_form", return_value={"ok": False, "status": 0, "attempt": "page_form"}), \
+             patch.object(reauth, "_submit_login_email_otp_page_form", side_effect=AssertionError("page form should be skipped")), \
              patch.object(reauth, "_trigger_passwordless_login_otp", return_value={"ok": False, "status": 404, "attempt": "passwordless_login_send_otp"}), \
              patch.object(reauth, "_send_login_otp", return_value={"ok": True, "status": 500, "attempt": "remix:email_otp_send"}), \
              patch.object(reauth, "_validate_login_otp", side_effect=fake_validate), \

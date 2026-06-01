@@ -1221,17 +1221,10 @@ def _handle_email_otp_step(
         enter_info = _enter_login_email_otp_step(registrar, state)
         debug["enter_email_otp"] = enter_info
         _log_stage(f"邮箱验证码登录页打开结果：{_response_brief(enter_info)}")
-        _log_stage("尝试通过邮箱验证码页面表单触发验证码")
-        form_info = _submit_login_email_otp_page_form(registrar, enter_info)
-        debug["email_otp_page_form"] = form_info
-        if form_info.get("ok"):
-            _log_stage(f"邮箱验证码页面表单已触发：{_response_brief(form_info)}，方式={form_info.get('attempt') or '-'}")
-            _log_stage("页面表单已触发验证码发送，等待邮箱验证码")
-            code = _wait_code_after(mail_config, mailbox)
-        else:
-            _log_stage(f"邮箱验证码页面表单未触发：{_response_brief(form_info)}，方式={form_info.get('attempt') or '-'}，错误={str(form_info.get('error') or '')[:120] or '-'}，将尝试无密码接口")
+        debug["email_otp_page_form"] = {"skipped": True, "reason": "prefer_passwordless_send_otp"}
+        _log_stage("跳过邮箱验证码页面表单触发，直接使用无密码接口")
     if not code:
-        _log_stage("从密码页触发无密码邮箱验证码发送")
+        _log_stage("触发无密码邮箱验证码发送")
         trigger_info = _trigger_passwordless_login_otp(registrar)
         debug["passwordless_login_otp"] = trigger_info
         debug["passwordless_login_otp_summary"] = _safe_response_summary(trigger_info)
