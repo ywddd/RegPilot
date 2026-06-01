@@ -2957,6 +2957,24 @@ def _exchange_registered_account_tokens(
                 _submit_callback_to_cpa,
             )
 
+            def _sms_config_and_retry_count():
+                sms_config = _build_reauthorize_sms_config(
+                    sms_provider=str(getattr(config, "sms_provider", "") or "hero_sms"),
+                    sms_api_key=str(getattr(config, "sms_api_key", "") or ""),
+                    hero_sms_api_key=str(getattr(config, "hero_sms_api_key", "") or ""),
+                    smsbower_api_key=str(getattr(config, "smsbower_api_key", "") or ""),
+                    hero_sms_base_url=str(getattr(config, "hero_sms_base_url", "") or ""),
+                    smsbower_base_url=str(getattr(config, "smsbower_base_url", "") or ""),
+                    hero_sms_country=str(getattr(config, "hero_sms_country", "") or "16"),
+                    hero_sms_service=str(getattr(config, "hero_sms_service", "") or "dr"),
+                    hero_sms_max_price=getattr(config, "hero_sms_max_price", 0.0),
+                    sms_wait_timeout=int(getattr(config, "sms_wait_timeout", getattr(config, "hero_sms_wait_timeout", 60)) or 60),
+                    sms_wait_interval=int(getattr(config, "sms_wait_interval", getattr(config, "hero_sms_wait_interval", 5)) or 5),
+                    sms_auto_retry=parse_bool(getattr(config, "sms_auto_retry", getattr(config, "hero_sms_auto_retry", False)), key="sms_auto_retry"),
+                )
+                retry_count = max(1, int(getattr(config, "sms_retry_count", getattr(config, "hero_sms_retry_count", 3)) or 3)) if sms_config.auto_retry else 1
+                return sms_config, retry_count
+
             cpa_oauth = _start_cpa_oauth(
                 cpa_url=config.codex2api_url,
                 cpa_management_key=config.codex2api_admin_key,
@@ -3082,21 +3100,7 @@ def _exchange_registered_account_tokens(
                     )
                 if _step_requires_phone_verification(password_info):
                     try:
-                        sms_config = _build_reauthorize_sms_config(
-                            sms_provider=str(getattr(config, "sms_provider", "") or "hero_sms"),
-                            sms_api_key=str(getattr(config, "sms_api_key", "") or ""),
-                            hero_sms_api_key=str(getattr(config, "hero_sms_api_key", "") or ""),
-                            smsbower_api_key=str(getattr(config, "smsbower_api_key", "") or ""),
-                            hero_sms_base_url=str(getattr(config, "hero_sms_base_url", "") or ""),
-                            smsbower_base_url=str(getattr(config, "smsbower_base_url", "") or ""),
-                            hero_sms_country=str(getattr(config, "hero_sms_country", "") or "16"),
-                            hero_sms_service=str(getattr(config, "hero_sms_service") or "dr"),
-                            hero_sms_max_price=getattr(config, "hero_sms_max_price", 0.0),
-                            sms_wait_timeout=int(getattr(config, "sms_wait_timeout", getattr(config, "hero_sms_wait_timeout", 60)) or 60),
-                            sms_wait_interval=int(getattr(config, "sms_wait_interval", getattr(config, "hero_sms_wait_interval", 5)) or 5),
-                            sms_auto_retry=parse_bool(getattr(config, "sms_auto_retry", getattr(config, "hero_sms_auto_retry", False)), key="sms_auto_retry"),
-                        )
-                        retry_count = max(1, int(getattr(config, "sms_retry_count", getattr(config, "hero_sms_retry_count", 3)) or 3)) if sms_config.auto_retry else 1
+                        sms_config, retry_count = _sms_config_and_retry_count()
                         resolved_callback, phone_info, phone_debug = _continue_with_optional_phone_verification(
                             registrar,
                             password_info,
@@ -3121,21 +3125,7 @@ def _exchange_registered_account_tokens(
                     log(f"注册后 CPA OAuth 密码登录后回调：{'ready' if resolved_callback else 'missing'}")
             try:
                 if not resolved_callback:
-                    sms_config = _build_reauthorize_sms_config(
-                        sms_provider=str(getattr(config, "sms_provider", "") or "hero_sms"),
-                        sms_api_key=str(getattr(config, "sms_api_key", "") or ""),
-                        hero_sms_api_key=str(getattr(config, "hero_sms_api_key", "") or ""),
-                        smsbower_api_key=str(getattr(config, "smsbower_api_key", "") or ""),
-                        hero_sms_base_url=str(getattr(config, "hero_sms_base_url", "") or ""),
-                        smsbower_base_url=str(getattr(config, "smsbower_base_url", "") or ""),
-                        hero_sms_country=str(getattr(config, "hero_sms_country", "") or "16"),
-                        hero_sms_service=str(getattr(config, "hero_sms_service", "") or "dr"),
-                        hero_sms_max_price=getattr(config, "hero_sms_max_price", 0.0),
-                        sms_wait_timeout=int(getattr(config, "sms_wait_timeout", getattr(config, "hero_sms_wait_timeout", 60)) or 60),
-                        sms_wait_interval=int(getattr(config, "sms_wait_interval", getattr(config, "hero_sms_wait_interval", 5)) or 5),
-                        sms_auto_retry=parse_bool(getattr(config, "sms_auto_retry", getattr(config, "hero_sms_auto_retry", False)), key="sms_auto_retry"),
-                    )
-                    retry_count = max(1, int(getattr(config, "sms_retry_count", getattr(config, "hero_sms_retry_count", 3)) or 3)) if sms_config.auto_retry else 1
+                    sms_config, retry_count = _sms_config_and_retry_count()
                     resolved_callback, phone_info, phone_debug = _continue_with_optional_phone_verification(
                         registrar,
                         oauth_info,
