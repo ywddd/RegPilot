@@ -2423,6 +2423,13 @@ def auto_reauthorize_account_with_email_otp(
     hero_sms_wait_interval: int = 5,
     hero_sms_auto_retry: bool = False,
     hero_sms_retry_count: int = 3,
+    sms_wait_timeout: int | None = None,
+    sms_wait_interval: int | None = None,
+    sms_resend_after_seconds: int | None = None,
+    sms_timeout_after_resend_seconds: int | None = None,
+    sms_release_after_seconds: int | None = None,
+    sms_auto_retry: bool | None = None,
+    sms_retry_count: int | None = None,
     allow_phone_verification: bool = False,
 ) -> ReauthorizeAutoOutcome:
     account = get_account(account_id)
@@ -2454,11 +2461,15 @@ def auto_reauthorize_account_with_email_otp(
         hero_sms_service=hero_sms_service,
         hero_sms_min_price=hero_sms_min_price,
         hero_sms_max_price=hero_sms_max_price,
-        sms_wait_timeout=hero_sms_wait_timeout,
-        sms_wait_interval=hero_sms_wait_interval,
-        sms_auto_retry=hero_sms_auto_retry,
+        sms_wait_timeout=sms_wait_timeout if sms_wait_timeout not in (None, "") else hero_sms_wait_timeout,
+        sms_wait_interval=sms_wait_interval if sms_wait_interval not in (None, "") else hero_sms_wait_interval,
+        sms_resend_after_seconds=sms_resend_after_seconds if sms_resend_after_seconds not in (None, "") else 30,
+        sms_timeout_after_resend_seconds=sms_timeout_after_resend_seconds if sms_timeout_after_resend_seconds not in (None, "") else 60,
+        sms_release_after_seconds=sms_release_after_seconds if sms_release_after_seconds not in (None, "") else 120,
+        sms_auto_retry=sms_auto_retry if sms_auto_retry is not None else hero_sms_auto_retry,
+        sms_retry_count=sms_retry_count if sms_retry_count not in (None, "") else hero_sms_retry_count,
     )
-    sms_retry_count = max(1, int(hero_sms_retry_count or 1)) if sms_config.auto_retry else 1
+    sms_retry_count = sms_config.max_retry_count if sms_config.auto_retry else 1
     _log_stage(f"OpenAI 代理：{_proxy_text(registrar_proxy)}")
     registrar = PlatformRegistrar(registrar_proxy)
     try:

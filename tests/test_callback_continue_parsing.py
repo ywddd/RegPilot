@@ -4590,6 +4590,13 @@ class ReauthorizePhoneVerificationTests(unittest.TestCase):
                 sms_provider="smsbower",
                 sms_api_key="sms-key",
                 hero_sms_country="1003",
+                sms_wait_timeout=120,
+                sms_wait_interval=6,
+                sms_resend_after_seconds=11,
+                sms_timeout_after_resend_seconds=22,
+                sms_release_after_seconds=33,
+                sms_auto_retry=True,
+                sms_retry_count=4,
             )
 
         self.assertFalse(result.ok)

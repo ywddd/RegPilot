@@ -714,6 +714,12 @@ def _bool_from_payload(payload: dict[str, Any], key: str, default: bool = False)
     return parse_bool(payload.get(key, default), default=default, key=key)
 
 
+def _bool_from_renamed_payload(payload: dict[str, Any], key: str, legacy_key: str, default: bool = False) -> bool:
+    if payload.get(key) not in (None, ""):
+        return _bool_from_payload(payload, key, default)
+    return _bool_from_payload(payload, legacy_key, default)
+
+
 def _cloudflare_mail_provider_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     cf_temp_base_url = str(payload.get("cf_temp_base_url") or "").strip()
     cf_temp_base_url = re.sub(r"^(https?):/(?!/)", r"\1://", cf_temp_base_url, flags=re.I)
@@ -813,10 +819,10 @@ def _register_config_from_payload(payload: dict[str, Any]):
         hero_sms_service=str(payload.get("hero_sms_service") or "").strip(),
         hero_sms_min_price=float(payload.get("hero_sms_min_price") or 0),
         hero_sms_max_price=float(payload.get("hero_sms_max_price") or 0),
-        hero_sms_wait_timeout=int(payload.get("hero_sms_wait_timeout") or 180),
-        hero_sms_wait_interval=int(payload.get("hero_sms_wait_interval") or 5),
-        hero_sms_auto_retry=_bool_from_payload(payload, "hero_sms_auto_retry"),
-        hero_sms_retry_count=max(1, int(payload.get("hero_sms_retry_count") or 3)),
+        hero_sms_wait_timeout=int(payload.get("sms_wait_timeout") or payload.get("hero_sms_wait_timeout") or 180),
+        hero_sms_wait_interval=int(payload.get("sms_wait_interval") or payload.get("hero_sms_wait_interval") or 5),
+        hero_sms_auto_retry=_bool_from_renamed_payload(payload, "sms_auto_retry", "hero_sms_auto_retry"),
+        hero_sms_retry_count=max(1, int(payload.get("sms_retry_count") or payload.get("hero_sms_retry_count") or 3)),
     )
     cfg = load_config(args)
     cfg.mail.request_timeout = raw["mail"]["request_timeout"]
@@ -827,8 +833,8 @@ def _register_config_from_payload(payload: dict[str, Any]):
     cfg.sms_api_key = str(payload.get("sms_api_key") or "").strip()
     cfg.smsbower_api_key = str(payload.get("smsbower_api_key") or "").strip()
     cfg.smsbower_base_url = str(payload.get("smsbower_base_url") or SMSBOWER_BASE_URL).strip() or SMSBOWER_BASE_URL
-    cfg.hero_sms_auto_retry = _bool_from_payload(payload, "hero_sms_auto_retry")
-    cfg.hero_sms_retry_count = max(1, int(payload.get("hero_sms_retry_count") or 3))
+    cfg.hero_sms_auto_retry = _bool_from_renamed_payload(payload, "sms_auto_retry", "hero_sms_auto_retry")
+    cfg.hero_sms_retry_count = max(1, int(payload.get("sms_retry_count") or payload.get("hero_sms_retry_count") or 3))
     cfg.default_password = str(payload.get("default_password") or "")
     cfg.hero_sms_min_price = float(payload.get("hero_sms_min_price") or 0)
     return cfg
@@ -969,7 +975,7 @@ def _sms_retry_count_from_payload(payload: dict[str, Any], auto_retry: bool) -> 
     if not auto_retry:
         return 1
     try:
-        return max(1, int(payload.get("hero_sms_retry_count") or HERO_SMS_MAX_RETRY_COUNT))
+        return max(1, int(payload.get("sms_retry_count") or payload.get("hero_sms_retry_count") or HERO_SMS_MAX_RETRY_COUNT))
     except (TypeError, ValueError):
         return HERO_SMS_MAX_RETRY_COUNT
 
@@ -1211,7 +1217,7 @@ def _sms_config_from_payload(payload: dict[str, Any]) -> HeroSMSConfig:
         max_price=float(payload.get("hero_sms_max_price") or 0),
         wait_timeout=max(15, int(payload.get("sms_wait_timeout") or payload.get("hero_sms_wait_timeout") or 60)),
         wait_interval=max(1, int(payload.get("sms_wait_interval") or payload.get("hero_sms_wait_interval") or 5)),
-        auto_retry=_bool_from_payload(payload, "sms_auto_retry") or _bool_from_payload(payload, "hero_sms_auto_retry"),
+        auto_retry=_bool_from_renamed_payload(payload, "sms_auto_retry", "hero_sms_auto_retry"),
         resend_after_seconds=max(1, int(payload.get("sms_resend_after_seconds") or payload.get("hero_sms_resend_after_seconds") or 30)),
         timeout_after_resend_seconds=max(1, int(payload.get("sms_timeout_after_resend_seconds") or payload.get("hero_sms_timeout_after_resend_seconds") or 60)),
         release_after_seconds=max(15, int(payload.get("sms_release_after_seconds") or payload.get("hero_sms_release_after_seconds") or 120)),
@@ -1681,6 +1687,7 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                 last_error = ""
                 for attempt_index in range(1, attempt_limit + 1):
                     attempt_payload = dict(worker_payload)
+                    attempt_payload["sms_retry_count"] = 1
                     attempt_payload["hero_sms_retry_count"] = 1
                     attempt_env_profile = prepare_environment_profile_from_payload(attempt_payload, fallback_proxy=str(attempt_payload.get("proxy") or ""))
                     attempt_proxy = str(attempt_env_profile.proxy or attempt_payload.get("proxy") or "").strip()

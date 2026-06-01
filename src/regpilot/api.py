@@ -132,13 +132,20 @@ class ReauthorizeAutoRequest(BaseModel):
     hero_sms_service: str = ""
     hero_sms_min_price: float | str = 0.0
     hero_sms_max_price: float | str = 0.0
-    sms_wait_timeout: int = 60
-    sms_wait_interval: int = 5
-    sms_resend_after_seconds: int = 30
-    sms_timeout_after_resend_seconds: int = 60
-    sms_release_after_seconds: int = 120
+    sms_wait_timeout: int | None = None
+    sms_wait_interval: int | None = None
+    sms_resend_after_seconds: int | None = None
+    sms_timeout_after_resend_seconds: int | None = None
+    sms_release_after_seconds: int | None = None
     sms_auto_retry: bool | None = None
     sms_retry_count: int | None = None
+    hero_sms_wait_timeout: int | None = None
+    hero_sms_wait_interval: int | None = None
+    hero_sms_resend_after_seconds: int | None = None
+    hero_sms_timeout_after_resend_seconds: int | None = None
+    hero_sms_release_after_seconds: int | None = None
+    hero_sms_auto_retry: bool | None = None
+    hero_sms_retry_count: int | None = None
     allow_phone_verification: bool = False
 
 
@@ -341,11 +348,37 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
         phone_cfg = data.get("hero_phone_bind") if isinstance(data.get("hero_phone_bind"), dict) else {}
     merged: dict[str, Any] = {**register_cfg, **phone_cfg}
 
-    def pick(key: str, default: Any = "") -> Any:
+    def explicit_value(key: str) -> Any:
         explicit = getattr(payload, key, None)
         if explicit not in (None, ""):
             return explicit
-        return merged.get(key, default)
+        return None
+
+    def config_value(key: str) -> Any:
+        value = merged.get(key)
+        if value not in (None, ""):
+            return value
+        return None
+
+    def pick(key: str, default: Any = "") -> Any:
+        explicit = explicit_value(key)
+        if explicit is not None:
+            return explicit
+        value = config_value(key)
+        if value is not None:
+            return value
+        return default
+
+    def pick_renamed(new_key: str, old_key: str, default: Any) -> Any:
+        for key in (new_key, old_key):
+            explicit = explicit_value(key)
+            if explicit is not None:
+                return explicit
+        for key in (new_key, old_key):
+            value = config_value(key)
+            if value is not None:
+                return value
+        return default
 
     provider = _sms_provider_for_values({"sms_provider": pick("sms_provider", "hero_sms")})
     api_key = str(pick("sms_api_key", "") or "").strip()
@@ -358,12 +391,12 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
     else:
         api_key = api_key or hero_key
     bounds = {
-        "sms_wait_timeout": pick("sms_wait_timeout", pick("hero_sms_wait_timeout", 60)),
-        "sms_wait_interval": pick("sms_wait_interval", pick("hero_sms_wait_interval", 5)),
-        "sms_resend_after_seconds": pick("sms_resend_after_seconds", pick("hero_sms_resend_after_seconds", 30)),
-        "sms_timeout_after_resend_seconds": pick("sms_timeout_after_resend_seconds", pick("hero_sms_timeout_after_resend_seconds", 60)),
-        "sms_release_after_seconds": pick("sms_release_after_seconds", pick("hero_sms_release_after_seconds", 120)),
-        "sms_retry_count": pick("sms_retry_count", pick("hero_sms_retry_count", 3)),
+        "sms_wait_timeout": pick_renamed("sms_wait_timeout", "hero_sms_wait_timeout", 60),
+        "sms_wait_interval": pick_renamed("sms_wait_interval", "hero_sms_wait_interval", 5),
+        "sms_resend_after_seconds": pick_renamed("sms_resend_after_seconds", "hero_sms_resend_after_seconds", 30),
+        "sms_timeout_after_resend_seconds": pick_renamed("sms_timeout_after_resend_seconds", "hero_sms_timeout_after_resend_seconds", 60),
+        "sms_release_after_seconds": pick_renamed("sms_release_after_seconds", "hero_sms_release_after_seconds", 120),
+        "sms_retry_count": pick_renamed("sms_retry_count", "hero_sms_retry_count", 3),
         "hero_sms_min_price": pick("hero_sms_min_price", 0.0),
         "hero_sms_max_price": pick("hero_sms_max_price", 0.0),
     }
@@ -402,7 +435,7 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
         "sms_timeout_after_resend_seconds": timeout_after_resend,
         "sms_release_after_seconds": release_after,
         "sms_auto_retry": _bool_for_values(
-            {"sms_auto_retry": pick("sms_auto_retry", pick("hero_sms_auto_retry", False))},
+            {"sms_auto_retry": pick_renamed("sms_auto_retry", "hero_sms_auto_retry", False)},
             "sms_auto_retry",
         ),
         "sms_retry_count": retry_count,
