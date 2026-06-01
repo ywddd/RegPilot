@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import html
 import json
@@ -136,15 +137,15 @@ def _viewport_pool_from_text(raw: str) -> list[tuple[int, int]]:
 def _build_common_headers() -> dict[str, str]:
     return {
         "accept": "application/json",
-        "accept-language": current_accept_language,
+        "accept-language": get_accept_language(),
         "content-type": "application/json",
         "origin": auth_base,
         "priority": "u=1, i",
-        "user-agent": user_agent,
-        "sec-ch-ua": sec_ch_ua,
+        "user-agent": get_user_agent(),
+        "sec-ch-ua": get_sec_ch_ua(),
         "sec-ch-ua-arch": '"x86_64"',
         "sec-ch-ua-bitness": '"64"',
-        "sec-ch-ua-full-version-list": sec_ch_ua_full_version_list,
+        "sec-ch-ua-full-version-list": get_sec_ch_ua_full_version_list(),
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-model": '""',
         "sec-ch-ua-platform": '"Windows"',
@@ -158,12 +159,12 @@ def _build_common_headers() -> dict[str, str]:
 def _build_navigate_headers() -> dict[str, str]:
     return {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "accept-language": current_accept_language,
-        "user-agent": user_agent,
-        "sec-ch-ua": sec_ch_ua,
+        "accept-language": get_accept_language(),
+        "user-agent": get_user_agent(),
+        "sec-ch-ua": get_sec_ch_ua(),
         "sec-ch-ua-arch": '"x86_64"',
         "sec-ch-ua-bitness": '"64"',
-        "sec-ch-ua-full-version-list": sec_ch_ua_full_version_list,
+        "sec-ch-ua-full-version-list": get_sec_ch_ua_full_version_list(),
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-model": '""',
         "sec-ch-ua-platform": '"Windows"',
@@ -259,75 +260,139 @@ def summarize_environment_profile(profile: EnvironmentProfile) -> str:
 
 def _snapshot_environment_state() -> dict[str, Any]:
     return {
-        "user_agent": user_agent,
-        "sec_ch_ua": sec_ch_ua,
-        "sec_ch_ua_full_version_list": sec_ch_ua_full_version_list,
-        "current_accept_language": current_accept_language,
-        "current_timezone": current_timezone,
-        "current_viewport_width": current_viewport_width,
-        "current_viewport_height": current_viewport_height,
-        "common_headers": dict(common_headers),
-        "navigate_headers": dict(navigate_headers),
+        "user_agent": _user_agent_var.get(),
+        "sec_ch_ua": _sec_ch_ua_var.get(),
+        "sec_ch_ua_full_version_list": _sec_ch_ua_full_version_list_var.get(),
+        "current_accept_language": _accept_language_var.get(),
+        "current_timezone": _timezone_var.get(),
+        "current_viewport_width": _viewport_width_var.get(),
+        "current_viewport_height": _viewport_height_var.get(),
+        "common_headers": _build_common_headers(),
+        "navigate_headers": _build_navigate_headers(),
     }
 
 
 def _apply_environment_state(profile: EnvironmentProfile) -> None:
-    global user_agent, sec_ch_ua, sec_ch_ua_full_version_list
-    global current_accept_language, current_timezone, current_viewport_width, current_viewport_height
-    user_agent = str(profile.user_agent).strip() or DEFAULT_ENV_UA_POOL[0]
-    major = _chrome_major_from_ua(user_agent)
-    full = _chrome_full_from_ua(user_agent)
-    sec_ch_ua = _sec_ch_ua_for_major(major)
-    sec_ch_ua_full_version_list = _sec_ch_ua_full_version_list(full)
-    current_accept_language = str(profile.accept_language).strip() or DEFAULT_ENV_ACCEPT_LANGUAGE_POOL[0]
-    current_timezone = str(profile.timezone).strip() or DEFAULT_ENV_TIMEZONE_POOL[0]
-    current_viewport_width = int(profile.viewport_width or DEFAULT_ENV_VIEWPORT_POOL[0][0])
-    current_viewport_height = int(profile.viewport_height or DEFAULT_ENV_VIEWPORT_POOL[0][1])
-    common_headers.clear()
-    common_headers.update(_build_common_headers())
-    navigate_headers.clear()
-    navigate_headers.update(_build_navigate_headers())
+    ua = str(profile.user_agent).strip() or DEFAULT_ENV_UA_POOL[0]
+    major = _chrome_major_from_ua(ua)
+    full = _chrome_full_from_ua(ua)
+    accept_language = str(profile.accept_language).strip() or DEFAULT_ENV_ACCEPT_LANGUAGE_POOL[0]
+    timezone = str(profile.timezone).strip() or DEFAULT_ENV_TIMEZONE_POOL[0]
+    viewport_width = int(profile.viewport_width or DEFAULT_ENV_VIEWPORT_POOL[0][0])
+    viewport_height = int(profile.viewport_height or DEFAULT_ENV_VIEWPORT_POOL[0][1])
+    _user_agent_var.set(ua)
+    _sec_ch_ua_var.set(_sec_ch_ua_for_major(major))
+    _sec_ch_ua_full_version_list_var.set(_sec_ch_ua_full_version_list(full))
+    _accept_language_var.set(accept_language)
+    _timezone_var.set(timezone)
+    _viewport_width_var.set(viewport_width)
+    _viewport_height_var.set(viewport_height)
 
 
 def _restore_environment_state(snapshot: dict[str, Any]) -> None:
-    global user_agent, sec_ch_ua, sec_ch_ua_full_version_list
-    global current_accept_language, current_timezone, current_viewport_width, current_viewport_height
-    user_agent = str(snapshot.get("user_agent") or DEFAULT_ENV_UA_POOL[0])
-    sec_ch_ua = str(snapshot.get("sec_ch_ua") or _sec_ch_ua_for_major(_chrome_major_from_ua(user_agent)))
-    sec_ch_ua_full_version_list = str(
-        snapshot.get("sec_ch_ua_full_version_list") or _sec_ch_ua_full_version_list(_chrome_full_from_ua(user_agent))
+    ua = str(snapshot.get("user_agent") or DEFAULT_ENV_UA_POOL[0])
+    _user_agent_var.set(ua)
+    _sec_ch_ua_var.set(str(snapshot.get("sec_ch_ua") or _sec_ch_ua_for_major(_chrome_major_from_ua(ua))))
+    _sec_ch_ua_full_version_list_var.set(
+        str(snapshot.get("sec_ch_ua_full_version_list") or _sec_ch_ua_full_version_list(_chrome_full_from_ua(ua)))
     )
-    current_accept_language = str(snapshot.get("current_accept_language") or DEFAULT_ENV_ACCEPT_LANGUAGE_POOL[0])
-    current_timezone = str(snapshot.get("current_timezone") or DEFAULT_ENV_TIMEZONE_POOL[0])
-    current_viewport_width = int(snapshot.get("current_viewport_width") or DEFAULT_ENV_VIEWPORT_POOL[0][0])
-    current_viewport_height = int(snapshot.get("current_viewport_height") or DEFAULT_ENV_VIEWPORT_POOL[0][1])
-    common_headers.clear()
-    common_headers.update(dict(snapshot.get("common_headers") or _build_common_headers()))
-    navigate_headers.clear()
-    navigate_headers.update(dict(snapshot.get("navigate_headers") or _build_navigate_headers()))
+    _accept_language_var.set(str(snapshot.get("current_accept_language") or DEFAULT_ENV_ACCEPT_LANGUAGE_POOL[0]))
+    _timezone_var.set(str(snapshot.get("current_timezone") or DEFAULT_ENV_TIMEZONE_POOL[0]))
+    _viewport_width_var.set(int(snapshot.get("current_viewport_width") or DEFAULT_ENV_VIEWPORT_POOL[0][0]))
+    _viewport_height_var.set(int(snapshot.get("current_viewport_height") or DEFAULT_ENV_VIEWPORT_POOL[0][1]))
 
 
 @contextmanager
 def environment_profile_context(profile: EnvironmentProfile):
-    with _ENV_LOCK:
-        snapshot = _snapshot_environment_state()
-        _apply_environment_state(profile)
-        try:
-            yield
-        finally:
-            _restore_environment_state(snapshot)
+    snapshot = _snapshot_environment_state()
+    _apply_environment_state(profile)
+    try:
+        yield
+    finally:
+        _restore_environment_state(snapshot)
 
 
 _DEFAULT_ENV = _default_environment_profile()
-user_agent = _DEFAULT_ENV.user_agent
-current_accept_language = _DEFAULT_ENV.accept_language
-current_timezone = _DEFAULT_ENV.timezone
-current_viewport_width = _DEFAULT_ENV.viewport_width
-current_viewport_height = _DEFAULT_ENV.viewport_height
-sec_ch_ua = _sec_ch_ua_for_major(_chrome_major_from_ua(user_agent))
-sec_ch_ua_full_version_list = _sec_ch_ua_full_version_list(_chrome_full_from_ua(user_agent))
-common_headers = _build_common_headers()
-navigate_headers = _build_navigate_headers()
+_user_agent_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "regpilot_user_agent", default=_DEFAULT_ENV.user_agent
+)
+_sec_ch_ua_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "regpilot_sec_ch_ua", default=_sec_ch_ua_for_major(_chrome_major_from_ua(_DEFAULT_ENV.user_agent))
+)
+_sec_ch_ua_full_version_list_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "regpilot_sec_ch_ua_full_version_list",
+    default=_sec_ch_ua_full_version_list(_chrome_full_from_ua(_DEFAULT_ENV.user_agent)),
+)
+_accept_language_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "regpilot_accept_language", default=_DEFAULT_ENV.accept_language
+)
+_timezone_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "regpilot_timezone", default=_DEFAULT_ENV.timezone
+)
+_viewport_width_var: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "regpilot_viewport_width", default=_DEFAULT_ENV.viewport_width
+)
+_viewport_height_var: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "regpilot_viewport_height", default=_DEFAULT_ENV.viewport_height
+)
+
+
+def get_user_agent() -> str:
+    return _user_agent_var.get()
+
+
+def get_sec_ch_ua() -> str:
+    return _sec_ch_ua_var.get()
+
+
+def get_sec_ch_ua_full_version_list() -> str:
+    return _sec_ch_ua_full_version_list_var.get()
+
+
+def get_accept_language() -> str:
+    return _accept_language_var.get()
+
+
+def get_timezone() -> str:
+    return _timezone_var.get()
+
+
+def get_viewport_width() -> int:
+    return _viewport_width_var.get()
+
+
+def get_viewport_height() -> int:
+    return _viewport_height_var.get()
+
+
+def get_common_headers() -> dict[str, str]:
+    return _build_common_headers()
+
+
+def get_navigate_headers() -> dict[str, str]:
+    return _build_navigate_headers()
+
+
+def __getattr__(name: str) -> Any:
+    if name == "user_agent":
+        return _user_agent_var.get()
+    if name == "sec_ch_ua":
+        return _sec_ch_ua_var.get()
+    if name == "sec_ch_ua_full_version_list":
+        return _sec_ch_ua_full_version_list_var.get()
+    if name == "current_accept_language":
+        return _accept_language_var.get()
+    if name == "current_timezone":
+        return _timezone_var.get()
+    if name == "current_viewport_width":
+        return _viewport_width_var.get()
+    if name == "current_viewport_height":
+        return _viewport_height_var.get()
+    if name == "common_headers":
+        return _build_common_headers()
+    if name == "navigate_headers":
+        return _build_navigate_headers()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass
@@ -802,11 +867,11 @@ class SentinelTokenGenerator:
 def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -> str:
     generator = SentinelTokenGenerator(
         device_id,
-        user_agent,
-        accept_language=current_accept_language,
-        timezone_name=current_timezone,
-        viewport_width=current_viewport_width,
-        viewport_height=current_viewport_height,
+        get_user_agent(),
+        accept_language=get_accept_language(),
+        timezone_name=get_timezone(),
+        viewport_width=get_viewport_width(),
+        viewport_height=get_viewport_height(),
     )
     resp = session.post(
         "https://sentinel.openai.com/backend-api/sentinel/req",
@@ -815,8 +880,8 @@ def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -
             "Content-Type": "text/plain;charset=UTF-8",
             "Referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html",
             "Origin": "https://sentinel.openai.com",
-            "User-Agent": user_agent,
-            "sec-ch-ua": sec_ch_ua,
+            "User-Agent": get_user_agent(),
+            "sec-ch-ua": get_sec_ch_ua(),
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
         },
@@ -870,7 +935,7 @@ def request_with_local_retry(session: requests.Session, method: str, url: str, r
 
 
 def validate_otp(session: requests.Session, device_id: str, code: str):
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["referer"] = f"{auth_base}/create-account/email-verification"
     headers["oai-device-id"] = device_id
     headers.update(_make_trace_headers())
@@ -1253,7 +1318,7 @@ def _append_consent_debug(debug_steps: list[dict[str, Any]] | None, **step: Any)
 
 
 def _build_authorize_continue_headers(session: requests.Session, device_id: str, referer: str) -> dict[str, str]:
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["referer"] = referer
     headers["oai-device-id"] = device_id
     headers.update(_make_trace_headers())
@@ -1299,7 +1364,7 @@ def _submit_workspace_select_from_consent_form(
         "origin": auth_base,
         "priority": "u=1, i",
         "referer": consent_url,
-        "user-agent": user_agent,
+        "user-agent": get_user_agent(),
         "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
@@ -1385,7 +1450,7 @@ def _submit_workspace_select_from_consent_form(
 
 
 def _har_like_browser_fetch_headers(referer: str, *, accept: str = "application/json", content_type: str = "application/json") -> dict[str, str]:
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["accept"] = accept
     headers["accept-language"] = "zh-CN,zh;q=0.9"
     headers["referer"] = referer if referer.startswith("http") else f"{auth_base}{referer}"
@@ -1570,7 +1635,7 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     current_url = consent_url
     consent_page_text = ""
     for _ in range(10):
-        response = session.get(current_url, headers=navigate_headers, verify=False, timeout=30, allow_redirects=False)
+        response = session.get(current_url, headers=get_navigate_headers(), verify=False, timeout=30, allow_redirects=False)
         _append_consent_debug(debug_steps, **_consent_response_summary(response, method="get", target=current_url, source="consent_page"))
         if not consent_page_text:
             consent_page_text = str(getattr(response, "text", "") or "")
@@ -1792,7 +1857,7 @@ def extract_oauth_callback_params_from_consent_session(session: requests.Session
     project_id = str(((orgs[0] or {}).get("projects") or [{}])[0].get("id") or "").strip()
     if not org_id:
         return None
-    org_headers = dict(common_headers)
+    org_headers = get_common_headers()
     org_headers["referer"] = str(ws_data.get("continue_url") or consent_url)
     org_headers["oai-device-id"] = device_id
     org_headers.update(_make_trace_headers())
@@ -1808,7 +1873,7 @@ def exchange_platform_tokens(session: requests.Session, device_id: str, code_ver
     callback_params = extract_oauth_callback_params_from_consent_session(session, consent_url, device_id)
     if not callback_params:
         try:
-            r = session.get(consent_url, headers=navigate_headers, allow_redirects=True, verify=False, timeout=30)
+            r = session.get(consent_url, headers=get_navigate_headers(), allow_redirects=True, verify=False, timeout=30)
             callback_params = _extract_oauth_callback_params_from_response(r)
             if not callback_params:
                 for hist in getattr(r, "history", []) or []:
@@ -2004,7 +2069,7 @@ class PlatformRegistrar:
         else:
             state = ""
             url = f"{auth_base}/u/signup/identifier"
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         if phone_hint:
             headers["referer"] = "https://chatgpt.com/"
             headers["sec-fetch-site"] = "cross-site"
@@ -2067,7 +2132,7 @@ class PlatformRegistrar:
             "login_hint": email_hint,
         }
         url = f"{auth_base}/api/accounts/authorize?" + urlencode(params)
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         headers["referer"] = "https://chatgpt.com/"
         headers["sec-fetch-site"] = "cross-site"
         headers["oai-device-id"] = self.device_id
@@ -2149,7 +2214,7 @@ class PlatformRegistrar:
             self.session,
             "get",
             url,
-            headers=navigate_headers,
+            headers=get_navigate_headers(),
             allow_redirects=True,
             verify=False,
         )
@@ -2187,7 +2252,7 @@ class PlatformRegistrar:
         return token
 
     def _build_accounts_headers(self, referer_path: str, flow: str) -> dict[str, str]:
-        headers = dict(common_headers)
+        headers = get_common_headers()
         headers["referer"] = f"{auth_base}{referer_path}"
         headers["oai-device-id"] = self.device_id
         headers["accept"] = "application/json"
@@ -2291,7 +2356,7 @@ class PlatformRegistrar:
         requested_flow = str(self.last_authorize.get("flow_kind") or "").strip()
         is_login_flow = requested_flow == "login" or any(token in final_url for token in ("/log-in", "screen_hint=login", "login_or_signup"))
         base_page = "/log-in/password" if is_login_flow else "/u/signup/password"
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         headers["oai-device-id"] = self.device_id
         headers.update(_make_trace_headers())
         try:
@@ -2450,7 +2515,7 @@ class PlatformRegistrar:
         return self._post_accounts_payload(payload, f"/u/signup/identifier?state={state}")
 
     def register_user(self, email: str, password: str) -> dict[str, Any]:
-        headers = dict(common_headers)
+        headers = get_common_headers()
         headers["referer"] = f"{auth_base}/create-account/password"
         headers["oai-device-id"] = self.device_id
         headers.update(_make_trace_headers())
@@ -2490,7 +2555,7 @@ class PlatformRegistrar:
         }
 
     def send_otp(self) -> dict[str, Any]:
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         headers["referer"] = f"{auth_base}/create-account/password"
         resp, error = request_with_local_retry(
             self.session,
@@ -2521,7 +2586,7 @@ class PlatformRegistrar:
         }
 
     def send_phone_otp(self) -> dict[str, Any]:
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         headers["referer"] = f"{auth_base}/create-account/phone-verification"
         resp, error = request_with_local_retry(
             self.session,
@@ -2577,7 +2642,7 @@ class PlatformRegistrar:
         }
 
     def validate_phone_signup_otp(self, code: str) -> dict[str, Any]:
-        headers = dict(common_headers)
+        headers = get_common_headers()
         headers["referer"] = f"{auth_base}/create-account/phone-verification"
         headers["oai-device-id"] = self.device_id
         headers.update(_make_trace_headers())
@@ -2614,7 +2679,7 @@ class PlatformRegistrar:
         }
 
     def create_account(self, name: str, birthdate: str, referer: str = "", page_context: str = "", email: str = "") -> dict[str, Any]:
-        headers = dict(common_headers)
+        headers = get_common_headers()
         headers["referer"] = str(referer or f"{auth_base}/about-you")
         headers["oai-device-id"] = self.device_id
         headers.update(_make_trace_headers())
@@ -2826,7 +2891,7 @@ def _follow_chatgpt_signup_callback(registrar: PlatformRegistrar, callback_url: 
     session = getattr(registrar, "session", None)
     if session is None:
         return {"followed": False, "final_url": target, "status": 0, "error": "session_missing"}
-    headers = dict(navigate_headers)
+    headers = get_navigate_headers()
     headers["referer"] = f"{auth_base}/about-you"
     headers["sec-fetch-site"] = "cross-site"
     try:

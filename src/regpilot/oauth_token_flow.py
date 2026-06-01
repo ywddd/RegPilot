@@ -25,8 +25,8 @@ from .register_core import (
     _decode_jwt_payload,
     _make_trace_headers,
     build_sentinel_token,
-    common_headers,
-    navigate_headers,
+    get_common_headers,
+    get_navigate_headers,
     auth_base,
     platform_oauth_audience,
     platform_oauth_client_id,
@@ -62,9 +62,13 @@ class HeroSMSConfig:
     service: str = "dr"
     min_price: float = 0.0
     max_price: float = 0.05
-    wait_timeout: int = 180
+    wait_timeout: int = 60
     wait_interval: int = 5
     auto_retry: bool = False
+    resend_after_seconds: int = HERO_SMS_RESEND_AFTER_SECONDS
+    timeout_after_resend_seconds: int = HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS
+    release_after_seconds: int = HERO_SMS_RELEASE_AFTER_SECONDS
+    max_retry_count: int = HERO_SMS_MAX_RETRY_COUNT
 
 
 @dataclass
@@ -1421,11 +1425,14 @@ def poll_hero_sms_code(
     on_progress: Any = None,
     progress_interval: int = 15,
 ) -> str:
-    wait_timeout = max(15, int(config.wait_timeout or HERO_SMS_RELEASE_AFTER_SECONDS))
+    resend_after = max(1, int(getattr(config, "resend_after_seconds", HERO_SMS_RESEND_AFTER_SECONDS) or HERO_SMS_RESEND_AFTER_SECONDS))
+    release_after = max(1, int(getattr(config, "release_after_seconds", HERO_SMS_RELEASE_AFTER_SECONDS) or HERO_SMS_RELEASE_AFTER_SECONDS))
+    timeout_after_resend_default = max(1, int(getattr(config, "timeout_after_resend_seconds", HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS) or HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS))
+    wait_timeout = max(15, int(config.wait_timeout or release_after))
     effective_timeout_after_resend = (
         int(timeout_after_resend)
         if timeout_after_resend is not None
-        else (HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS if callable(on_resend) else None)
+        else (timeout_after_resend_default if callable(on_resend) else None)
     )
     deadline = datetime.now(timezone.utc).timestamp() + wait_timeout
     interval = max(1, int(config.wait_interval or 5))
@@ -1447,7 +1454,7 @@ def poll_hero_sms_code(
         if re.search(r"STATUS_CANCEL|STATUS_BANNED|NO_ACTIVATION|BAD_STATUS|ERROR|CANCELED|CANCELLED|BANNED|TIMEOUT", text, re.I):
             raise RuntimeError(f"hero_sms_terminal_status: {text[:300]}")
         elapsed = max(0, int(datetime.now(timezone.utc).timestamp() - start_ts))
-        if (not resent) and elapsed >= HERO_SMS_RESEND_AFTER_SECONDS:
+        if (not resent) and elapsed >= resend_after:
             if callable(on_resend):
                 on_resend()
             resent = True
@@ -1463,7 +1470,7 @@ def poll_hero_sms_code(
                     "wait_timeout": wait_timeout,
                     "remaining": remaining,
                     "resent": resent,
-                    "resend_after_seconds": HERO_SMS_RESEND_AFTER_SECONDS,
+                    "resend_after_seconds": resend_after,
                     "after_resend_elapsed": max(0, int(now_ts - resend_ts)) if resent and resend_ts else 0,
                     "timeout_after_resend": int(effective_timeout_after_resend) if effective_timeout_after_resend is not None else None,
                 }
@@ -1525,7 +1532,7 @@ def _phone_activation_reactivate(config: HeroSMSConfig, activation_id: str) -> N
 
 
 def _auth_json_headers(registrar: PlatformRegistrar, referer: str, sentinel_flow: str) -> dict[str, str]:
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["accept"] = "application/json"
     headers["content-type"] = "application/json"
     headers["referer"] = referer
@@ -1559,7 +1566,7 @@ def _fetch_phone_verification_page_text(registrar: PlatformRegistrar, candidate_
             registrar.session,
             "get",
             target,
-            headers=navigate_headers,
+            headers=get_navigate_headers(),
             allow_redirects=True,
             verify=False,
         )
@@ -1689,7 +1696,7 @@ def _probe_phone_signup_password_page(registrar: PlatformRegistrar, phone_number
         registrar.session,
         "get",
         target,
-        headers=navigate_headers,
+        headers=get_navigate_headers(),
         allow_redirects=True,
         verify=False,
     )
@@ -1767,7 +1774,7 @@ def _load_continue_page(registrar: PlatformRegistrar, continue_url: str) -> dict
         registrar.session,
         "get",
         target,
-        headers=navigate_headers,
+        headers=get_navigate_headers(),
         allow_redirects=True,
         verify=False,
     )
@@ -1849,7 +1856,7 @@ def _resolve_oauth_callback(registrar: PlatformRegistrar, candidate_url: str, st
                 response = active_session.request(
                     "GET",
                     url,
-                    headers=navigate_headers,
+                    headers=get_navigate_headers(),
                     allow_redirects=True,
                     verify=False,
                     timeout=max(3, int(request_timeout or 8)),
@@ -1913,7 +1920,7 @@ def _resolve_oauth_callback(registrar: PlatformRegistrar, candidate_url: str, st
                         form_method.upper(),
                         form_action,
                         data=payload if form_method == 'post' else None,
-                        headers=navigate_headers,
+                        headers=get_navigate_headers(),
                         allow_redirects=True,
                         verify=False,
                         timeout=max(3, int(request_timeout or 8)),
@@ -2256,7 +2263,7 @@ def _submit_about_you_form(
                 registrar.session,
                 'get',
                 refresh_url,
-                headers=navigate_headers,
+                headers=get_navigate_headers(),
                 allow_redirects=True,
                 verify=False,
             )
@@ -2402,7 +2409,7 @@ def _post_form_and_follow(
         target = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, raw_action[1:], parsed.fragment))
     else:
         target = urljoin(page_url, raw_action)
-    headers = dict(navigate_headers)
+    headers = get_navigate_headers()
     headers["content-type"] = "application/x-www-form-urlencoded"
     headers["origin"] = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}"
     headers["referer"] = page_url
@@ -2763,7 +2770,7 @@ def _add_email_headers(
     content_type: str = "application/json",
     include_sentinel: bool = True,
 ) -> dict[str, str]:
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["accept"] = "application/json, text/plain, */*"
     headers["accept-language"] = "zh-CN,zh;q=0.9"
     headers["referer"] = str(referer or f"{auth_base}/add-email")
@@ -2957,7 +2964,7 @@ def _refresh_add_email_code_page(registrar: PlatformRegistrar, current_url: str)
         if not target or target in seen:
             continue
         seen.add(target)
-        headers = dict(navigate_headers)
+        headers = get_navigate_headers()
         headers["accept"] = "application/json, text/html, */*"
         headers["referer"] = target
         headers["oai-device-id"] = registrar.device_id
@@ -3094,7 +3101,7 @@ def _continue_with_optional_add_email(
                 registrar.session,
                 "get",
                 continue_url,
-                headers=navigate_headers,
+                headers=get_navigate_headers(),
                 allow_redirects=True,
                 verify=False,
             )
@@ -3114,7 +3121,7 @@ def _continue_with_optional_add_email(
         registrar.session,
         "get",
         continue_url,
-        headers=navigate_headers,
+        headers=get_navigate_headers(),
         allow_redirects=True,
         verify=False,
     )

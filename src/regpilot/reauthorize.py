@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .accounts_store import get_account, save_registration_result_to_account, upsert_account
 from .config import DATA_DIR, MailConfig, RegisterConfig
-from .register_core import PlatformRegistrar, RegistrationResult, auth_base, wait_for_code, _response_json, extract_oauth_callback_params_from_consent_session, common_headers, _make_trace_headers, _registration_state_from_info, _decode_jwt_payload, build_sentinel_token, _random_name, _random_birthdate, _about_you_shape_log_summary, _accounts_error_code
+from .register_core import PlatformRegistrar, RegistrationResult, auth_base, wait_for_code, _response_json, extract_oauth_callback_params_from_consent_session, get_common_headers, _make_trace_headers, _registration_state_from_info, _decode_jwt_payload, build_sentinel_token, _random_name, _random_birthdate, _about_you_shape_log_summary, _accounts_error_code
 from .oauth_token_flow import (
     HeroSMSConfig,
     SMSBOWER_BASE_URL,
@@ -66,7 +66,7 @@ class ReauthorizeFinishOutcome:
 
 def _har_browser_fetch_headers(referer_path: str, *, accept: str = "application/json", content_type: str = "application/json") -> dict[str, str]:
     referer = referer_path if referer_path.startswith("http") else f"{auth_base}{referer_path}"
-    headers = dict(common_headers)
+    headers = get_common_headers()
     headers["accept"] = accept
     headers["accept-language"] = "zh-CN,zh;q=0.9"
     headers["referer"] = referer
@@ -1334,8 +1334,12 @@ def _build_reauthorize_sms_config(
     hero_sms_service: str = "",
     hero_sms_min_price: float | str = 0.0,
     hero_sms_max_price: float | str = 0.0,
-    hero_sms_wait_timeout: int = 180,
+    hero_sms_wait_timeout: int = 60,
     hero_sms_wait_interval: int = 5,
+    hero_sms_resend_after_seconds: int = 30,
+    hero_sms_timeout_after_resend_seconds: int = 60,
+    hero_sms_release_after_seconds: int = 120,
+    hero_sms_retry_count: int = 3,
     hero_sms_auto_retry: bool = False,
 ) -> HeroSMSConfig:
     provider = _normalize_sms_provider(sms_provider or "hero_sms")
@@ -1381,8 +1385,12 @@ def _build_reauthorize_sms_config(
         service=service,
         min_price=min_price,
         max_price=max_price,
-        wait_timeout=max(15, int(hero_sms_wait_timeout or 180)),
+        wait_timeout=max(15, int(hero_sms_wait_timeout or 60)),
         wait_interval=max(1, int(hero_sms_wait_interval or 5)),
+        resend_after_seconds=max(1, int(hero_sms_resend_after_seconds or 30)),
+        timeout_after_resend_seconds=max(1, int(hero_sms_timeout_after_resend_seconds or 60)),
+        release_after_seconds=max(15, int(hero_sms_release_after_seconds or 120)),
+        max_retry_count=max(1, int(hero_sms_retry_count or 3)),
         auto_retry=bool(hero_sms_auto_retry),
     )
 
@@ -2170,7 +2178,7 @@ def _exchange_local_tokens_after_cpa(
     prepared.authorize_url = urlunparse(parsed_authorize._replace(query=urlencode(authorize_params, doseq=True)))
     registrar.session.cookies.set("oai-did", session_device_id, domain=".auth.openai.com")
     registrar.session.cookies.set("oai-did", session_device_id, domain="auth.openai.com")
-    response = registrar.session.get(prepared.authorize_url, headers=common_headers, verify=False, timeout=30, allow_redirects=True)
+    response = registrar.session.get(prepared.authorize_url, headers=get_common_headers(), verify=False, timeout=30, allow_redirects=True)
     state = prepared.state
     final_url = str(getattr(response, "url", prepared.authorize_url) or prepared.authorize_url)
     authorize_info = {"ok": 200 <= int(getattr(response, "status_code", 0) or 0) < 400, "status": int(getattr(response, "status_code", 0) or 0), "json": _response_json(response), "text": str(getattr(response, "text", "") or "")[:2000], "location": str(getattr(response, "headers", {}).get("Location") or ""), "final_url": final_url}

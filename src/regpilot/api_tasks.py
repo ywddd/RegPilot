@@ -13,6 +13,7 @@ from typing import Any
 
 from .cli import load_config
 from .config import DATA_DIR, LOG_DIR, RegisterConfig, ensure_dirs, parse_bool
+from .logging_utils import reset_log_context, set_log_context
 from .register_core import environment_profile_context, prepare_environment_profile_from_payload, run_placeholder, save_result, summarize_environment_profile, PlatformRegistrar, _random_birthdate, _random_name, _random_password, _exchange_registered_account_tokens, _about_you_shape_log_summary, _accounts_error_code
 from .oauth_token_flow import HeroSMSConfig, HERO_SMS_MAX_RETRY_COUNT, HERO_SMS_RELEASE_AFTER_SECONDS, HERO_SMS_RESEND_AFTER_SECONDS, SMSBOWER_BASE_URL, FIVESIM_BASE_URL, _continue_with_optional_add_email, _load_continue_page, _normalize_sms_provider, _probe_phone_signup_password_page, _resolve_oauth_callback, _save_partial_hero_phone_bind_result, _set_phone_flow_stage, _submit_about_you_form, acquire_hero_sms_phone, fetch_country_name_zh_map, fetch_hero_sms_countries, fetch_hero_sms_price_summary, fetch_hero_sms_quote_list, import_result_to_codex2api, poll_hero_sms_code, set_hero_sms_status
 
@@ -114,8 +115,11 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "hero_sms_service": "dr",
         "hero_sms_min_price": "",
         "hero_sms_max_price": "0.023",
-        "hero_sms_wait_timeout": 180,
+        "hero_sms_wait_timeout": 60,
         "hero_sms_wait_interval": 5,
+        "hero_sms_resend_after_seconds": 30,
+        "hero_sms_timeout_after_resend_seconds": 60,
+        "hero_sms_release_after_seconds": 120,
         "hero_sms_auto_retry": False,
         "hero_sms_retry_count": 3,
     },
@@ -142,8 +146,11 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "hero_sms_service": "dr",
         "hero_sms_min_price": "",
         "hero_sms_max_price": "0.023",
-        "hero_sms_wait_timeout": 180,
+        "hero_sms_wait_timeout": 60,
         "hero_sms_wait_interval": 5,
+        "hero_sms_resend_after_seconds": 30,
+        "hero_sms_timeout_after_resend_seconds": 60,
+        "hero_sms_release_after_seconds": 120,
         "hero_sms_auto_retry": False,
         "hero_sms_retry_count": 3,
         "mail_type": "cloudflare-temp-email",
@@ -535,6 +542,30 @@ def _write_last_valid_webui_config(config: dict[str, dict[str, Any]]) -> None:
 
 def _load_webui_config() -> dict[str, dict[str, Any]]:
     ensure_dirs()
+    return _get_cached_webui_config()
+
+
+_WEBUI_CONFIG_CACHE: dict[str, Any] = {
+    "signature": None,
+    "data": None,
+}
+_WEBUI_CONFIG_LOCK = threading.Lock()
+
+
+def _webui_config_signature() -> tuple[Any, Any]:
+    try:
+        mtime_webui = WEBUI_CONFIG_PATH.stat().st_mtime if WEBUI_CONFIG_PATH.exists() else None
+    except Exception:
+        mtime_webui = None
+    try:
+        last_result_path = DATA_DIR / "last_result.json"
+        mtime_last = last_result_path.stat().st_mtime if last_result_path.exists() else None
+    except Exception:
+        mtime_last = None
+    return mtime_webui, mtime_last
+
+
+def _load_webui_config_uncached() -> dict[str, dict[str, Any]]:
     if not WEBUI_CONFIG_PATH.exists():
         return _apply_last_result_prefill(_clone_webui_config_defaults())
     try:
@@ -548,6 +579,23 @@ def _load_webui_config() -> dict[str, dict[str, Any]]:
         return _apply_last_result_prefill(merged)
     _write_last_valid_webui_config(merged)
     return _apply_last_result_prefill(merged)
+
+
+def _get_cached_webui_config() -> dict[str, dict[str, Any]]:
+    signature = _webui_config_signature()
+    with _WEBUI_CONFIG_LOCK:
+        if _WEBUI_CONFIG_CACHE["data"] is not None and _WEBUI_CONFIG_CACHE["signature"] == signature:
+            return json.loads(json.dumps(_WEBUI_CONFIG_CACHE["data"]))
+        data = _load_webui_config_uncached()
+        _WEBUI_CONFIG_CACHE["data"] = data
+        _WEBUI_CONFIG_CACHE["signature"] = signature
+        return json.loads(json.dumps(data))
+
+
+def _invalidate_webui_config_cache() -> None:
+    with _WEBUI_CONFIG_LOCK:
+        _WEBUI_CONFIG_CACHE["data"] = None
+        _WEBUI_CONFIG_CACHE["signature"] = None
 
 
 _WEBUI_BOOL_KEYS = {
@@ -567,6 +615,9 @@ _WEBUI_POSITIVE_INT_KEYS = {
     "wait_interval",
     "hero_sms_wait_timeout",
     "hero_sms_wait_interval",
+    "hero_sms_resend_after_seconds",
+    "hero_sms_timeout_after_resend_seconds",
+    "hero_sms_release_after_seconds",
     "hero_sms_retry_count",
     "concurrency",
     "priority",
@@ -621,6 +672,7 @@ def _save_webui_config(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     ensure_dirs()
     WEBUI_CONFIG_PATH.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _write_last_valid_webui_config(merged)
+    _invalidate_webui_config_cache()
     return merged
 
 
@@ -629,6 +681,7 @@ def _reset_webui_config() -> dict[str, dict[str, Any]]:
     ensure_dirs()
     WEBUI_CONFIG_PATH.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _write_last_valid_webui_config(merged)
+    _invalidate_webui_config_cache()
     return merged
 
 
@@ -937,6 +990,7 @@ def _run_job(kind: str, func, *args: Any, **kwargs: Any) -> dict[str, str]:
 
     def target() -> None:
         stdout = _JobOutputStream(job_id)
+        log_tokens = set_log_context(task_id=job_id)
         try:
             JOBS.raise_if_stop_requested(job_id)
             # stdout/stderr redirection is process-global, and OAuth state can be
@@ -976,6 +1030,8 @@ def _run_job(kind: str, func, *args: Any, **kwargs: Any) -> dict[str, str]:
                 error={"message": str(exc), "traceback": traceback.format_exc()},
                 output=_job_output_text(),
             )
+        finally:
+            reset_log_context(log_tokens)
 
     threading.Thread(target=target, daemon=True).start()
     return {"ok": True, "job_id": job_id}
@@ -1128,9 +1184,13 @@ def _sms_config_from_payload(payload: dict[str, Any]) -> HeroSMSConfig:
         service=service,
         min_price=float(payload.get("hero_sms_min_price") or 0),
         max_price=float(payload.get("hero_sms_max_price") or 0),
-        wait_timeout=int(payload.get("hero_sms_wait_timeout") or 180),
-        wait_interval=int(payload.get("hero_sms_wait_interval") or 5),
+        wait_timeout=max(15, int(payload.get("hero_sms_wait_timeout") or 60)),
+        wait_interval=max(1, int(payload.get("hero_sms_wait_interval") or 5)),
         auto_retry=_bool_from_payload(payload, "hero_sms_auto_retry"),
+        resend_after_seconds=max(1, int(payload.get("hero_sms_resend_after_seconds") or 30)),
+        timeout_after_resend_seconds=max(1, int(payload.get("hero_sms_timeout_after_resend_seconds") or 60)),
+        release_after_seconds=max(15, int(payload.get("hero_sms_release_after_seconds") or 120)),
+        max_retry_count=max(1, int(payload.get("hero_sms_retry_count") or 3)),
     )
 
 
@@ -1583,77 +1643,81 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
     failures: list[dict[str, Any]] = []
 
     def _worker(index: int) -> dict[str, Any]:
-        worker_payload = dict(payload or {})
-        worker_payload["total"] = 1
-        worker_payload["threads"] = 1
-        print(f"阶段：手机直注并发单元 {index}/{requested_total} 已启动")
-        if rotate_environment:
-            hero_sms = _sms_config_from_payload(worker_payload)
-            attempt_limit = _sms_retry_count_from_payload(worker_payload, hero_sms.auto_retry)
-            attempted_phones: list[str] = []
-            last_error = ""
-            for attempt_index in range(1, attempt_limit + 1):
-                attempt_payload = dict(worker_payload)
-                attempt_payload["hero_sms_retry_count"] = 1
-                attempt_env_profile = prepare_environment_profile_from_payload(attempt_payload, fallback_proxy=str(attempt_payload.get("proxy") or ""))
-                attempt_proxy = str(attempt_env_profile.proxy or attempt_payload.get("proxy") or "").strip()
-                print(
-                    f"阶段：并发单元 {index}/{requested_total} 第 {attempt_index}/{attempt_limit} 次环境 "
-                    f"{summarize_environment_profile(attempt_env_profile)}"
-                )
-                try:
-                    item = _phone_direct_once(
-                        attempt_payload,
-                        env_profile=attempt_env_profile,
-                        effective_proxy=attempt_proxy,
-                        manage_environment=True,
-                        log_environment=False,
-                        worker_index=index,
-                        worker_total=requested_total,
+        worker_log_tokens = set_log_context(worker_id=f"{index}/{requested_total}")
+        try:
+            worker_payload = dict(payload or {})
+            worker_payload["total"] = 1
+            worker_payload["threads"] = 1
+            print(f"阶段：手机直注并发单元 {index}/{requested_total} 已启动")
+            if rotate_environment:
+                hero_sms = _sms_config_from_payload(worker_payload)
+                attempt_limit = _sms_retry_count_from_payload(worker_payload, hero_sms.auto_retry)
+                attempted_phones: list[str] = []
+                last_error = ""
+                for attempt_index in range(1, attempt_limit + 1):
+                    attempt_payload = dict(worker_payload)
+                    attempt_payload["hero_sms_retry_count"] = 1
+                    attempt_env_profile = prepare_environment_profile_from_payload(attempt_payload, fallback_proxy=str(attempt_payload.get("proxy") or ""))
+                    attempt_proxy = str(attempt_env_profile.proxy or attempt_payload.get("proxy") or "").strip()
+                    print(
+                        f"阶段：并发单元 {index}/{requested_total} 第 {attempt_index}/{attempt_limit} 次环境 "
+                        f"{summarize_environment_profile(attempt_env_profile)}"
                     )
-                    for phone in item.get("phones_attempted") or []:
-                        if phone and phone not in attempted_phones:
-                            attempted_phones.append(str(phone))
-                    if attempted_phones:
-                        item["phones_attempted"] = list(attempted_phones)
-                    print(f"阶段：手机直注并发单元 {index}/{requested_total} 已完成")
-                    return item
-                except Exception as exc:
-                    last_error = _unwrap_sms_retry_error(str(exc))
-                    phones = getattr(exc, "phones_attempted", None)
-                    if phones:
-                        for phone in phones:
+                    try:
+                        item = _phone_direct_once(
+                            attempt_payload,
+                            env_profile=attempt_env_profile,
+                            effective_proxy=attempt_proxy,
+                            manage_environment=True,
+                            log_environment=False,
+                            worker_index=index,
+                            worker_total=requested_total,
+                        )
+                        for phone in item.get("phones_attempted") or []:
                             if phone and phone not in attempted_phones:
                                 attempted_phones.append(str(phone))
-                    else:
-                        phone = str(getattr(exc, "phone_number", "") or "")
-                        if phone and phone not in attempted_phones:
-                            attempted_phones.append(phone)
-                    if _is_sms_inventory_error(last_error) or not hero_sms.auto_retry or attempt_index >= attempt_limit:
-                        retry_error = RuntimeError(_sms_retry_exhausted_message(hero_sms.provider, attempt_limit, last_error))
-                        try:
-                            setattr(retry_error, "phones_attempted", list(attempted_phones))
-                            if attempted_phones:
-                                setattr(retry_error, "phone_number", attempted_phones[-1])
-                        except Exception:
-                            pass
-                        raise retry_error
-                    print(
-                        f"阶段：并发单元 {index}/{requested_total} 当前环境/号码失败，"
-                        f"将重新抽取环境并换号重试（{attempt_index}/{attempt_limit}），错误={last_error}"
-                    )
-            raise RuntimeError(last_error or "phone_direct_failed")
-        item = _phone_direct_once(
-            worker_payload,
-            env_profile=env_profile,
-            effective_proxy=effective_proxy,
-            manage_environment=False,
-            log_environment=False,
-            worker_index=index,
-            worker_total=requested_total,
-        )
-        print(f"阶段：手机直注并发单元 {index}/{requested_total} 已完成")
-        return item
+                        if attempted_phones:
+                            item["phones_attempted"] = list(attempted_phones)
+                        print(f"阶段：手机直注并发单元 {index}/{requested_total} 已完成")
+                        return item
+                    except Exception as exc:
+                        last_error = _unwrap_sms_retry_error(str(exc))
+                        phones = getattr(exc, "phones_attempted", None)
+                        if phones:
+                            for phone in phones:
+                                if phone and phone not in attempted_phones:
+                                    attempted_phones.append(str(phone))
+                        else:
+                            phone = str(getattr(exc, "phone_number", "") or "")
+                            if phone and phone not in attempted_phones:
+                                attempted_phones.append(phone)
+                        if _is_sms_inventory_error(last_error) or not hero_sms.auto_retry or attempt_index >= attempt_limit:
+                            retry_error = RuntimeError(_sms_retry_exhausted_message(hero_sms.provider, attempt_limit, last_error))
+                            try:
+                                setattr(retry_error, "phones_attempted", list(attempted_phones))
+                                if attempted_phones:
+                                    setattr(retry_error, "phone_number", attempted_phones[-1])
+                            except Exception:
+                                pass
+                            raise retry_error
+                        print(
+                            f"阶段：并发单元 {index}/{requested_total} 当前环境/号码失败，"
+                            f"将重新抽取环境并换号重试（{attempt_index}/{attempt_limit}），错误={last_error}"
+                        )
+                raise RuntimeError(last_error or "phone_direct_failed")
+            item = _phone_direct_once(
+                worker_payload,
+                env_profile=env_profile,
+                effective_proxy=effective_proxy,
+                manage_environment=False,
+                log_environment=False,
+                worker_index=index,
+                worker_total=requested_total,
+            )
+            print(f"阶段：手机直注并发单元 {index}/{requested_total} 已完成")
+            return item
+        finally:
+            reset_log_context(worker_log_tokens)
 
     executor_context = nullcontext() if rotate_environment else environment_profile_context(env_profile)
     with executor_context:
