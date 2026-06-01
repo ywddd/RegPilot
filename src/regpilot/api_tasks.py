@@ -12,10 +12,12 @@ from typing import Any
 from .cli import load_config
 from .config import DATA_DIR, LOG_DIR, RegisterConfig, ensure_dirs, parse_bool
 from .job_runner import run_job as _run_job_impl
+from .job_store import JobCancelledError, JobStore as _BaseJobStore
 from .json_store import write_json_atomic
 from .logging_utils import reset_log_context, set_log_context
 from .register_core import environment_profile_context, prepare_environment_profile_from_payload, run_placeholder, save_result, summarize_environment_profile, PlatformRegistrar, _random_birthdate, _random_name, _random_password, _exchange_registered_account_tokens, _about_you_shape_log_summary, _accounts_error_code
-from .oauth_token_flow import HeroSMSConfig, HERO_SMS_MAX_RETRY_COUNT, HERO_SMS_RELEASE_AFTER_SECONDS, HERO_SMS_RESEND_AFTER_SECONDS, SMSBOWER_BASE_URL, FIVESIM_BASE_URL, _continue_with_optional_add_email, _load_continue_page, _normalize_sms_provider, _probe_phone_signup_password_page, _resolve_oauth_callback, _save_partial_hero_phone_bind_result, _set_phone_flow_stage, _submit_about_you_form, acquire_hero_sms_phone, fetch_country_name_zh_map, fetch_hero_sms_countries, fetch_hero_sms_price_summary, fetch_hero_sms_quote_list, import_result_to_codex2api, poll_hero_sms_code, set_hero_sms_status
+from .oauth_token_flow import HERO_SMS_MAX_RETRY_COUNT, HERO_SMS_RELEASE_AFTER_SECONDS, HERO_SMS_RESEND_AFTER_SECONDS, _continue_with_optional_add_email, _load_continue_page, _probe_phone_signup_password_page, _resolve_oauth_callback, _save_partial_hero_phone_bind_result, _set_phone_flow_stage, _submit_about_you_form, acquire_hero_sms_phone, fetch_country_name_zh_map, fetch_hero_sms_countries, fetch_hero_sms_price_summary, fetch_hero_sms_quote_list, import_result_to_codex2api, poll_hero_sms_code, set_hero_sms_status
+from .sms_provider_config import SMSBOWER_BASE_URL, build_sms_config_from_values, normalize_sms_provider, sms_api_key_from_values, sms_provider_from_values
 
 
 WEBUI_CONFIG_PATH = DATA_DIR / "webui_config.json"
@@ -110,6 +112,7 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "hero_sms_base_url": "https://hero-sms.com/stubs/handler_api.php",
         "smsbower_api_key": "",
         "smsbower_base_url": SMSBOWER_BASE_URL,
+        "fivesim_api_key": "",
         "hero_sms_country": "16",
         "hero_sms_country_label": "英格兰 (United Kingdom)",
         "hero_sms_service": "dr",
@@ -141,6 +144,7 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "sms_api_key": "",
         "smsbower_api_key": "",
         "smsbower_base_url": SMSBOWER_BASE_URL,
+        "fivesim_api_key": "",
         "hero_sms_country": "16",
         "hero_sms_country_label": "英格兰 (United Kingdom)",
         "hero_sms_service": "dr",
@@ -205,224 +209,15 @@ def _apply_last_result_prefill(config: dict[str, dict[str, Any]]) -> dict[str, d
 
 
 LEGACY_WEBUI_REMOVED = True
-class JobCancelledError(RuntimeError):
-    pass
 
-
-class JobStore:
-    MAX_OUTPUT_CHARS = 200_000
-
+class JobStore(_BaseJobStore):
     def __init__(self, *, restore: bool = False) -> None:
-        self._lock = threading.Lock()
-        self._jobs: dict[str, dict[str, Any]] = {}
-        self._counter = 0
-        try:
-            (LOG_DIR / "jobs").mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        if restore:
-            self._restore_from_disk()
-
-    def _trim_output(self, output: str) -> str:
-        text = str(output or "")
-        if len(text) <= self.MAX_OUTPUT_CHARS:
-            return text
-        return "... output truncated ...\n" + text[-self.MAX_OUTPUT_CHARS:]
-
-    def _repair_restored_output(self, output: str) -> str:
-        text = str(output or "")
-        try:
-            repaired = text.encode("latin1").decode("utf-8")
-        except Exception:
-            return text
-        if repaired.count("阶段") > text.count("阶段") or repaired.count("手机") > text.count("手机"):
-            return repaired
-        return text
-
-    def _restore_from_disk(self) -> None:
-        log_dir = LOG_DIR / "jobs"
-        try:
-            files = sorted(path for path in log_dir.glob("*.log") if path.is_file())
-        except Exception:
-            files = []
-        for path in files:
-            match = re.match(r"^(\d{8}-\d{6})-(job-(\d+))-(.+)\.log$", path.name)
-            if not match:
-                continue
-            timestamp_text, raw_job_id, counter_text, raw_kind = match.groups()
-            try:
-                started_at = time.strftime("%Y-%m-%d %H:%M:%S", time.strptime(timestamp_text, "%Y%m%d-%H%M%S"))
-            except Exception:
-                started_at = ""
-            try:
-                finished_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(path.stat().st_mtime))
-            except Exception:
-                finished_at = ""
-            try:
-                output = path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                output = ""
-            output = self._repair_restored_output(output)
-            status = "done"
-            lowered = output.lower()
-            if "阶段：任务失败" in output or "traceback" in lowered:
-                status = "failed"
-            elif "用户请求停止" in output or "job_stopped_by_user" in lowered:
-                status = "stopped"
-            elif not output.strip():
-                status = "queued"
-            job_id = raw_job_id
-            if job_id in self._jobs:
-                job_id = f"{raw_job_id}-{timestamp_text}"
-            try:
-                self._counter = max(self._counter, int(counter_text))
-            except Exception:
-                pass
-            job = {
-                "id": job_id,
-                "kind": raw_kind,
-                "status": status,
-                "started_at": started_at,
-                "finished_at": finished_at if status not in {"queued", "running", "stopping"} else "",
-                "result": None,
-                "error": None,
-                "output": self._trim_output(output),
-                "log_path": str(path),
-                "stop_requested": False,
-                "meta": {
-                    "stage": "",
-                    "current_phone": "",
-                },
-            }
-            self._update_meta_from_output(job)
-            if status == "failed":
-                job["meta"] = {**(job.get("meta") or {}), "stage": str((job.get("meta") or {}).get("stage") or "任务失败")}
-            elif status == "stopped":
-                job["meta"] = {**(job.get("meta") or {}), "stage": str((job.get("meta") or {}).get("stage") or "任务已停止")}
-            self._jobs[job_id] = job
-
-    def create(self, kind: str) -> str:
-        with self._lock:
-            self._counter += 1
-            job_id = f"job-{self._counter}"
-            log_dir = LOG_DIR / "jobs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            started_at = time.strftime("%Y-%m-%d %H:%M:%S")
-            log_path = log_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{job_id}-{re.sub(r'[^a-zA-Z0-9_-]+', '_', str(kind or 'job'))}.log"
-            self._jobs[job_id] = {
-                "id": job_id,
-                "kind": kind,
-                "status": "queued",
-                "started_at": started_at,
-                "finished_at": "",
-                "result": None,
-                "error": None,
-                "output": "",
-                "log_path": str(log_path),
-                "stop_requested": False,
-                "meta": {
-                    "stage": "",
-                    "current_phone": "",
-                },
-            }
-            return job_id
-
-    def finish(self, job_id: str, *, result: Any = None, error: Any = None, output: str = "") -> None:
-        with self._lock:
-            job = self._jobs[job_id]
-            result_failed = isinstance(result, dict) and result.get("ok") is False
-            job["status"] = "failed" if error or result_failed else "done"
-            job["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            job["result"] = result
-            job["error"] = error
-            job["output"] = self._trim_output(output)
-            if result_failed:
-                stage = _zh_task_error(result.get("error") or result.get("message") or "任务失败")
-                job["meta"] = {**(job.get("meta") or {}), "stage": f"结束：{stage}"}
-            elif error:
-                stage = _zh_task_error((error or {}).get("message") if isinstance(error, dict) else error)
-                job["meta"] = {**(job.get("meta") or {}), "stage": f"结束：{stage or '任务异常'}"}
-        _prune_job_logs()
-
-    def append_output(self, job_id: str, chunk: str) -> None:
-        if not chunk:
-            return
-        with self._lock:
-            job = self._jobs[job_id]
-            job["output"] = self._trim_output(str(job.get("output") or "") + chunk)
-            log_path = str(job.get("log_path") or "")
-            if log_path:
-                try:
-                    with open(log_path, "a", encoding="utf-8") as handle:
-                        handle.write(chunk)
-                except Exception:
-                    pass
-            self._update_meta_from_output(job)
-
-    def request_stop(self, job_id: str) -> dict[str, Any]:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job:
-                raise ValueError("job_not_found")
-            status = str(job.get("status") or "")
-            if status == "stopping":
-                return {"ok": True, "job_id": job_id, "status": "stopping", "message": "停止请求已发送"}
-            if status not in {"queued", "running"}:
-                return {"ok": False, "job_id": job_id, "status": job.get("status") or "unknown", "message": "任务当前不在运行中"}
-            job["stop_requested"] = True
-            job["status"] = "stopping"
-            job["meta"] = {**(job.get("meta") or {}), "stage": "用户请求停止任务"}
-            job["output"] = str(job.get("output") or "") + "阶段：用户请求停止任务\n"
-            return {"ok": True, "job_id": job_id, "status": "stopping", "message": "已发送停止请求，等待当前步骤结束"}
-
-    def should_stop(self, job_id: str) -> bool:
-        with self._lock:
-            job = self._jobs.get(job_id) or {}
-            return bool(job.get("stop_requested"))
-
-    def raise_if_stop_requested(self, job_id: str) -> None:
-        if self.should_stop(job_id):
-            raise JobCancelledError("job_stopped_by_user")
-
-    def _update_meta_from_output(self, job: dict[str, Any]) -> None:
-        output = str(job.get("output") or "")
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        if not lines:
-            return
-        stage = str(job.get("meta", {}).get("stage") or "")
-        current_phone = str(job.get("meta", {}).get("current_phone") or "")
-        for line in lines[-30:]:
-            if "Flow stage:" in line:
-                stage = line.split("Flow stage:", 1)[1].strip()
-            elif line.startswith("阶段："):
-                stage = line.split("阶段：", 1)[1].strip()
-            elif "CPA phone:" in line:
-                phone = line.split("CPA phone:", 1)[1].strip()
-                if phone:
-                    current_phone = phone
-                    stage = "phone active"
-            elif "已创建邮箱：" in line:
-                stage = "mailbox created"
-            elif "邮箱验证码发送结果" in line or "send_otp" in line:
-                stage = "waiting email code"
-            elif "已收到邮箱验证码：" in line:
-                stage = "email code received"
-            elif "账号创建结果" in line or "create_account" in line:
-                stage = "creating account"
-        job["meta"] = {
-            "stage": stage,
-            "current_phone": current_phone,
-        }
-
-    def list(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return list(reversed(list(self._jobs.values())))
-
-    def mark_running(self, job_id: str) -> None:
-        with self._lock:
-            job = self._jobs[job_id]
-            if str(job.get("status") or "") != "stopping":
-                job["status"] = "running"
+        super().__init__(
+            restore=restore,
+            log_dir_getter=lambda: LOG_DIR,
+            prune_callback=lambda: _prune_job_logs(),
+            error_translator=_zh_task_error,
+        )
 
 
 JOBS = JobStore(restore=True)
@@ -490,6 +285,9 @@ def _migrate_legacy_webui_config(config: dict[str, Any]) -> dict[str, Any]:
         for old_key, new_key in _WEBUI_LEGACY_KEY_MIGRATIONS:
             if old_key in section and new_key not in section:
                 section[new_key] = section[old_key]
+        provider = str(section.get("sms_provider") or "").strip().lower().replace("-", "_")
+        if provider in {"5sim", "five_sim", "fivesim", "five"} and not str(section.get("fivesim_api_key") or "").strip():
+            section["fivesim_api_key"] = str(section.get("sms_api_key") or section.get("hero_sms_api_key") or "").strip()
     return config
 
 
@@ -801,6 +599,7 @@ def _register_config_from_payload(payload: dict[str, Any]):
         sms_provider=str(payload.get("sms_provider") or "hero_sms").strip(),
         sms_api_key=str(payload.get("sms_api_key") or "").strip(),
         smsbower_api_key=str(payload.get("smsbower_api_key") or "").strip(),
+        fivesim_api_key=str(payload.get("fivesim_api_key") or "").strip(),
         smsbower_base_url=str(payload.get("smsbower_base_url") or SMSBOWER_BASE_URL).strip(),
         hero_sms_country=str(payload.get("hero_sms_country") or "").strip(),
         hero_sms_service=str(payload.get("hero_sms_service") or "").strip(),
@@ -819,6 +618,7 @@ def _register_config_from_payload(payload: dict[str, Any]):
     cfg.sms_provider = str(payload.get("sms_provider") or "hero_sms").strip() or "hero_sms"
     cfg.sms_api_key = str(payload.get("sms_api_key") or "").strip()
     cfg.smsbower_api_key = str(payload.get("smsbower_api_key") or "").strip()
+    cfg.fivesim_api_key = str(payload.get("fivesim_api_key") or "").strip()
     cfg.smsbower_base_url = str(payload.get("smsbower_base_url") or SMSBOWER_BASE_URL).strip() or SMSBOWER_BASE_URL
     cfg.hero_sms_auto_retry = _bool_from_renamed_payload(payload, "sms_auto_retry", "hero_sms_auto_retry")
     cfg.hero_sms_retry_count = _positive_int_from_renamed_payload(payload, "sms_retry_count", "hero_sms_retry_count", 3)
@@ -855,6 +655,7 @@ def _mail_config_dict_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "request_timeout": int(payload.get("request_timeout") or 30),
         "wait_timeout": int(payload.get("wait_timeout") or 60),
+        "bind_email_wait_timeout": int(payload.get("bind_email_wait_timeout") or payload.get("add_email_wait_timeout") or 180),
         "wait_interval": int(payload.get("wait_interval") or 2),
         "providers": providers,
     }
@@ -943,7 +744,7 @@ def _phone_signup_entry_error(*items: Any) -> str:
 
 
 def _sms_retry_exhausted_message(provider: str, attempts: int, error: str) -> str:
-    normalized = _normalize_sms_provider(provider or "hero_sms")
+    normalized = normalize_sms_provider(provider or "hero_sms", strict=False)
     return f"{normalized}_retry_exhausted_after_{max(1, int(attempts or 1))}_attempts: {str(error or '').strip() or 'unknown_error'}"
 
 
@@ -1073,7 +874,7 @@ def _run_register(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _hero_sms_payload_with_fallback(payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(payload or {})
-    has_explicit_provider_key = bool(str(merged.get("hero_sms_api_key") or "").strip() or str(merged.get("smsbower_api_key") or "").strip())
+    has_explicit_provider_key = bool(str(merged.get("hero_sms_api_key") or "").strip() or str(merged.get("smsbower_api_key") or "").strip() or str(merged.get("fivesim_api_key") or "").strip())
     webui_config = _load_webui_config()
     register_cfg = (webui_config.get("register") or {}) if isinstance(webui_config, dict) else {}
     for key in (
@@ -1088,6 +889,7 @@ def _hero_sms_payload_with_fallback(payload: dict[str, Any]) -> dict[str, Any]:
         "hero_sms_api_key",
         "hero_sms_base_url",
         "smsbower_api_key",
+        "fivesim_api_key",
         "smsbower_base_url",
         "hero_sms_service",
         "hero_sms_country",
@@ -1113,65 +915,16 @@ def _hero_sms_payload_with_fallback(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sms_provider_from_payload(payload: dict[str, Any]) -> str:
-    raw = str(payload.get("sms_provider") or payload.get("phone_sms_provider") or "hero_sms").strip().lower().replace("-", "_")
-    if raw in {"5sim", "five_sim", "fivesim", "five"}:
-        return "5sim"
-    if raw in {"hero_sms", "herosms", "hero"}:
-        return "hero_sms"
-    if raw in {"smsbower", "sms_bower", "smsbower_page"}:
-        return "smsbower"
-    raise ValueError("invalid_sms_provider")
+    return sms_provider_from_values(payload)
 
 
 def _sms_api_key_from_payload(payload: dict[str, Any], provider: str) -> str:
-    generic_key = str(payload.get("sms_api_key") or "").strip()
-    if provider == "smsbower":
-        return str(payload.get("smsbower_api_key") or generic_key or "").strip()
-    if provider == "5sim":
-        return str(generic_key or payload.get("hero_sms_api_key") or "").strip()
-    return str(payload.get("hero_sms_api_key") or generic_key or "").strip()
+    return sms_api_key_from_values(payload, provider)
 
 
-def _sms_config_from_payload(payload: dict[str, Any]) -> HeroSMSConfig:
+def _sms_config_from_payload(payload: dict[str, Any]):
     payload = _hero_sms_payload_with_fallback(payload)
-    provider = _sms_provider_from_payload(payload)
-    api_key = _sms_api_key_from_payload(payload, provider)
-    if provider == "smsbower":
-        base_url = str(payload.get("smsbower_base_url") or SMSBOWER_BASE_URL).strip() or SMSBOWER_BASE_URL
-    elif provider == "5sim":
-        base_url = str(payload.get("fivesim_base_url") or payload.get("hero_sms_base_url") or FIVESIM_BASE_URL).strip() or FIVESIM_BASE_URL
-        if "hero-sms.com" in base_url.lower() or "smsbower" in base_url.lower():
-            base_url = FIVESIM_BASE_URL
-    else:
-        base_url = str(payload.get("hero_sms_base_url") or "https://hero-sms.com/stubs/handler_api.php").strip() or "https://hero-sms.com/stubs/handler_api.php"
-    default_country = "england" if provider == "5sim" else "16"
-    default_service = "openai" if provider == "5sim" else "dr"
-    country = str(payload.get("hero_sms_country") or "").strip()
-    service = str(payload.get("hero_sms_service") or "").strip()
-    if provider == "5sim":
-        if not country or country.isdigit():
-            country = default_country
-        if not service or service == "dr":
-            service = default_service
-    else:
-        country = country or default_country
-        service = service or default_service
-    return HeroSMSConfig(
-        provider=provider,
-        api_key=api_key,
-        base_url=base_url,
-        country=country,
-        service=service,
-        min_price=float(payload.get("hero_sms_min_price") or 0),
-        max_price=float(payload.get("hero_sms_max_price") or 0),
-        wait_timeout=_positive_int_from_renamed_payload(payload, "sms_wait_timeout", "hero_sms_wait_timeout", 60, 15),
-        wait_interval=_positive_int_from_renamed_payload(payload, "sms_wait_interval", "hero_sms_wait_interval", 5),
-        auto_retry=_bool_from_renamed_payload(payload, "sms_auto_retry", "hero_sms_auto_retry"),
-        resend_after_seconds=_positive_int_from_renamed_payload(payload, "sms_resend_after_seconds", "hero_sms_resend_after_seconds", 30),
-        timeout_after_resend_seconds=_positive_int_from_renamed_payload(payload, "sms_timeout_after_resend_seconds", "hero_sms_timeout_after_resend_seconds", 60),
-        release_after_seconds=_positive_int_from_renamed_payload(payload, "sms_release_after_seconds", "hero_sms_release_after_seconds", 120, 15),
-        max_retry_count=_positive_int_from_renamed_payload(payload, "sms_retry_count", "hero_sms_retry_count", 3),
-    )
+    return build_sms_config_from_values(payload)
 
 
 def _hero_price_lookup(payload: dict[str, Any]) -> dict[str, Any]:

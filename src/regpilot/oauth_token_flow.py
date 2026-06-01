@@ -1247,7 +1247,7 @@ def fetch_country_name_zh_map() -> dict[str, str]:
     return lookup
 
 
-def _resolve_hero_sms_price_candidates_for_retry(config: HeroSMSConfig) -> list[float]:
+def _resolve_hero_sms_catalog_price_candidates(config: HeroSMSConfig) -> list[float]:
     candidates: list[float] = []
     try:
         quote = fetch_hero_sms_quote_list(config)
@@ -1291,7 +1291,11 @@ def _resolve_hero_sms_price_candidates_for_retry(config: HeroSMSConfig) -> list[
             candidates = []
 
     min_limit = _normalize_hero_sms_price(getattr(config, "min_price", 0.0))
-    unique_sorted = sorted(set(round(float(price), 4) for price in candidates if min_limit is None or float(price) >= float(min_limit)))
+    return sorted(set(round(float(price), 4) for price in candidates if min_limit is None or float(price) >= float(min_limit)))
+
+
+def _resolve_hero_sms_price_candidates_for_retry(config: HeroSMSConfig) -> list[float]:
+    unique_sorted = _resolve_hero_sms_catalog_price_candidates(config)
     user_limit = _normalize_hero_sms_price(config.max_price)
     if user_limit is not None:
         bounded = [price for price in unique_sorted if price <= user_limit]
@@ -1299,6 +1303,20 @@ def _resolve_hero_sms_price_candidates_for_retry(config: HeroSMSConfig) -> list[
             return bounded
         return [round(float(user_limit), 4)]
     return unique_sorted
+
+
+def _resolve_hero_sms_exact_request_price(config: HeroSMSConfig, price_limit: float | None) -> str:
+    normalized_limit = _normalize_hero_sms_price(price_limit)
+    if normalized_limit is None or normalized_limit <= 0:
+        return ""
+    try:
+        candidates = _resolve_hero_sms_catalog_price_candidates(config)
+    except Exception:
+        candidates = []
+    for candidate in candidates:
+        if abs(float(candidate) - float(normalized_limit)) <= 1e-9:
+            return f"{float(candidate):.4f}"
+    return ""
 
 
 def _normalize_acquired_phone_number(phone_number: str) -> str:
@@ -1422,7 +1440,7 @@ def acquire_hero_sms_phone(
     phone_number = str(match.group(2) or "").strip()
     price = _activation_price_from_payload(payload)
     if not price and (not _is_smsbower_config(config)) and price_limit is not None and price_limit > 0:
-        price = f"≤{float(price_limit):.4f}"
+        price = _resolve_hero_sms_exact_request_price(config, price_limit) or f"≤{float(price_limit):.4f}"
     return _activation_result(activation_id, phone_number, price=price)
 
 
@@ -3095,6 +3113,21 @@ def _has_add_email_code_form(html_text: str) -> bool:
     return any("code" in str(key).lower() or "otp" in str(key).lower() for key in fields)
 
 
+def _bind_email_wait_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    out = dict(config or {})
+    try:
+        base_timeout = int(out.get("wait_timeout") or 0)
+    except (TypeError, ValueError):
+        base_timeout = 0
+    try:
+        bind_timeout = int(out.get("bind_email_wait_timeout") or out.get("add_email_wait_timeout") or 180)
+    except (TypeError, ValueError):
+        bind_timeout = 180
+    if bind_timeout > base_timeout:
+        out["wait_timeout"] = bind_timeout
+    return out
+
+
 def _continue_with_optional_add_email(
     registrar: PlatformRegistrar,
     *,
@@ -3191,7 +3224,7 @@ def _continue_with_optional_add_email(
         if mailbox is None:
             raise RuntimeError("bind_email_code_required")
         print("阶段：等待绑定邮箱验证码")
-        code = str(mail_provider.wait_for_code(bind_mail_config or {}, mailbox) or "").strip()
+        code = str(mail_provider.wait_for_code(_bind_email_wait_config(bind_mail_config), mailbox) or "").strip()
     if not code:
         raise RuntimeError("bind_email_code_timeout")
     print(f"阶段：已收到绑定邮箱验证码：{code}")

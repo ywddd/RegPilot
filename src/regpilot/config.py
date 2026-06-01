@@ -56,6 +56,7 @@ class RegisterConfig:
     sms_provider: str = "hero_sms"
     sms_api_key: str = ""
     smsbower_api_key: str = ""
+    fivesim_api_key: str = ""
     smsbower_base_url: str = "https://smsbower.page/stubs/handler_api.php"
     hero_sms_country: str = "16"
     hero_sms_service: str = "dr"

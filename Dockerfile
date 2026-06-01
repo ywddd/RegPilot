@@ -15,7 +15,7 @@ RUN python -m pip install --index-url "${PIP_INDEX_URL}" --trusted-host "${PIP_T
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN python -m pip install --index-url "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -e .
+RUN python -m pip install --no-build-isolation --index-url "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" -e .
 
 RUN mkdir -p /app/data /app/logs
 

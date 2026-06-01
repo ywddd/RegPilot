@@ -13,3 +13,4 @@ data/
 logs/
 reports/
 tmp_*
+backups/

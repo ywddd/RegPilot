@@ -773,6 +773,8 @@ def wait_for_code(config: RegisterConfig, mailbox: dict) -> str | None:
 
 class SentinelTokenGenerator:
     MAX_ATTEMPTS = 500000
+    MAX_SECONDS = 8.0
+    MAX_EXPECTED_ATTEMPTS = 150000
     ERROR_PREFIX = "wQ8Lk5FbGpA2NcR9dShT6gYjU7VxZ4D"
 
     def __init__(
@@ -853,10 +855,19 @@ class SentinelTokenGenerator:
         return "gAAAAAC" + self._b64(data)
 
     def generate_token(self, seed: str, difficulty: str) -> str:
+        difficulty = str(difficulty or "0").strip().lower() or "0"
+        if not re.fullmatch(r"[0-9a-f]+", difficulty):
+            raise TimeoutError("sentinel_pow_invalid_difficulty")
+        search_space = 16 ** len(difficulty)
+        threshold = int(difficulty, 16)
+        expected_attempts = search_space // max(1, threshold + 1)
+        if expected_attempts > self.MAX_EXPECTED_ATTEMPTS:
+            raise TimeoutError(f"sentinel_pow_too_hard:{difficulty}")
         start = time.time()
         data = self._get_config()
-        difficulty = str(difficulty or "0")
         for i in range(self.MAX_ATTEMPTS):
+            if i and i % 1024 == 0 and time.time() - start > self.MAX_SECONDS:
+                raise TimeoutError("sentinel_pow_timeout")
             data[3] = i
             data[9] = round((time.time() - start) * 1000)
             payload = self._b64(data)

@@ -18,6 +18,7 @@ from regpilot import oauth_token_flow as flow
 from regpilot import api as fastapi_api
 from regpilot import api_tasks
 from regpilot import accounts_store
+from regpilot import job_runner
 from regpilot import mail_provider
 from regpilot import reauthorize as reauth
 from regpilot import cli
@@ -165,6 +166,11 @@ class CallbackContinueParsingTests(unittest.TestCase):
         self.assertEqual(verify_call[2]["data"]["state"], "form-state")
         self.assertEqual(verify_call[2]["data"]["otp_code"], "123456")
         self.assertFalse(any("/api/accounts/email-otp/validate" in call[1] for call in calls))
+
+    def test_add_email_wait_config_defaults_to_longer_bind_email_timeout(self):
+        self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 60})["wait_timeout"], 180)
+        self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 60, "bind_email_wait_timeout": 240})["wait_timeout"], 240)
+        self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 300})["wait_timeout"], 300)
 
     def test_add_email_code_submit_prefers_code_form_when_email_form_is_also_present(self):
         callback_url = "http://localhost:1455/auth/callback?code=cb123&state=oauth-state"
@@ -3212,7 +3218,7 @@ class SMSProviderTests(unittest.TestCase):
         self.assertEqual(calls[0]["maxPrice"], 0.027)
         self.assertEqual(result, {"activation_id": "act-1", "phone_number": "+15551234567"})
 
-    def test_hero_sms_acquire_phone_uses_max_price_when_response_has_no_price(self):
+    def test_hero_sms_acquire_phone_reports_catalog_price_when_response_has_no_price(self):
         calls = []
 
         def fake_request(_config, params):
@@ -3226,7 +3232,37 @@ class SMSProviderTests(unittest.TestCase):
             max_price=0.023,
         )
 
-        with patch.object(flow, "_hero_sms_request", side_effect=fake_request):
+        quote = {
+            "quote_list_by_operator": [
+                {"price": 0.017, "quantity": 2},
+                {"price": 0.023, "quantity": 4},
+            ]
+        }
+        with patch.object(flow, "_hero_sms_request", side_effect=fake_request), \
+             patch.object(flow, "fetch_hero_sms_quote_list", return_value=quote):
+            result = flow.acquire_hero_sms_phone(config)
+
+        self.assertEqual(calls[0]["action"], "getNumber")
+        self.assertEqual(calls[0]["maxPrice"], 0.023)
+        self.assertEqual(result, {"activation_id": "act-1", "phone_number": "+15551234567", "price": "0.0230"})
+
+    def test_hero_sms_acquire_phone_keeps_max_price_fallback_without_catalog_price(self):
+        calls = []
+
+        def fake_request(_config, params):
+            calls.append(params)
+            return "ACCESS_NUMBER:act-1:15551234567"
+
+        config = flow.HeroSMSConfig(
+            provider="hero_sms",
+            api_key="k",
+            country="151",
+            max_price=0.023,
+        )
+
+        with patch.object(flow, "_hero_sms_request", side_effect=fake_request), \
+             patch.object(flow, "fetch_hero_sms_quote_list", side_effect=RuntimeError("offline")), \
+             patch.object(flow, "fetch_hero_sms_price_summary", side_effect=RuntimeError("offline")):
             result = flow.acquire_hero_sms_phone(config)
 
         self.assertEqual(calls[0]["action"], "getNumber")
@@ -3319,6 +3355,35 @@ class SMSProviderTests(unittest.TestCase):
         self.assertEqual(cfg.base_url, flow.FIVESIM_BASE_URL)
         self.assertEqual(cfg.country, "england")
         self.assertEqual(cfg.service, "openai")
+
+    def test_5sim_provider_prefers_dedicated_key(self):
+        payload = {
+            "sms_provider": "5sim",
+            "fivesim_api_key": "five-key",
+            "sms_api_key": "generic-key",
+            "hero_sms_api_key": "hero-key",
+            "hero_sms_country": "",
+            "hero_sms_service": "",
+        }
+
+        cfg = api_tasks._sms_config_from_payload(payload)
+
+        self.assertEqual(cfg.provider, "5sim")
+        self.assertEqual(cfg.api_key, "five-key")
+
+    def test_webui_config_migrates_saved_5sim_generic_key_to_dedicated_key(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"), \
+             patch("regpilot.api_tasks.WEBUI_CONFIG_LAST_VALID_PATH", Path(tmpdir) / "webui_config.last_valid.json"):
+            path = Path(tmpdir) / "webui_config.json"
+            path.write_text(
+                json.dumps({"hero_phone_bind": {"sms_provider": "5sim", "sms_api_key": "five-key"}}),
+                encoding="utf-8",
+            )
+
+            config = fastapi_api._load_webui_config()
+
+        self.assertEqual(config["hero_phone_bind"]["fivesim_api_key"], "five-key")
 
     def test_cpa_oauth_proxy_does_not_fallback_to_register_proxy(self):
         saved = {"register": {"proxy": "http://127.0.0.1:7890", "codex2api_proxy_url": ""}}
@@ -3631,6 +3696,26 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(error, "")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(session.calls[0][2]["timeout"], 7)
+
+    def test_sentinel_token_generator_rejects_expensive_pow(self):
+        generator = register_core.SentinelTokenGenerator("device-1", "ua")
+
+        with self.assertRaises(TimeoutError) as caught:
+            generator.generate_token("seed", "00000")
+
+        self.assertIn("sentinel_pow_too_hard", str(caught.exception))
+
+    def test_sentinel_token_generator_times_out_long_pow_search(self):
+        generator = register_core.SentinelTokenGenerator("device-1", "ua")
+        ticks = iter([0.0, 0.0, 9.0])
+
+        with patch("regpilot.register_core.time.time", side_effect=lambda: next(ticks, 9.0)), \
+             patch.object(generator, "_get_config", return_value=[0] * 18), \
+             patch.object(register_core.SentinelTokenGenerator, "_fnv1a_32", return_value="ffffffff"):
+            with self.assertRaises(TimeoutError) as caught:
+                generator.generate_token("seed", "7")
+
+        self.assertEqual(str(caught.exception), "sentinel_pow_timeout")
 
     def test_webui_config_loader_returns_shared_defaults(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"):
@@ -4298,6 +4383,27 @@ class StabilityTests(unittest.TestCase):
 
         self.assertIs(values["sms_auto_retry"], False)
 
+    def test_reauthorize_sms_values_prefers_saved_fivesim_key(self):
+        payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
+
+        with patch(
+            "regpilot.api._load_webui_config",
+            return_value={
+                "register": {},
+                "hero_phone_bind": {
+                    "sms_provider": "5sim",
+                    "sms_api_key": "generic-key",
+                    "hero_sms_api_key": "hero-key",
+                    "fivesim_api_key": "five-key",
+                },
+            },
+        ):
+            values = fastapi_api._prefer_reauthorize_sms_values(payload)
+
+        self.assertEqual(values["sms_provider"], "5sim")
+        self.assertEqual(values["sms_api_key"], "five-key")
+        self.assertEqual(values["fivesim_api_key"], "five-key")
+
     def test_reauthorize_sms_values_rejects_invalid_auto_retry_string(self):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
 
@@ -4402,6 +4508,77 @@ class StabilityTests(unittest.TestCase):
         after = store.list()[0]
         self.assertEqual(after["status"], "stopping")
 
+    def test_job_store_persists_stop_request_to_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(api_tasks, "LOG_DIR", Path(tmpdir)):
+            store = api_tasks.JobStore()
+            job_id = store.create("register")
+
+            store.request_stop(job_id)
+
+            job = store.list()[0]
+            self.assertIn("用户请求停止任务", Path(job["log_path"]).read_text(encoding="utf-8"))
+
+    def test_run_job_stops_queued_job_before_active_job_finishes(self):
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(api_tasks, "LOG_DIR", Path(tmpdir)):
+            store = api_tasks.JobStore()
+            execution_lock = threading.Lock()
+            first_started = threading.Event()
+            release_first = threading.Event()
+
+            def first_job():
+                first_started.set()
+                self.assertTrue(release_first.wait(5))
+                return {"ok": True}
+
+            def queued_job():
+                raise AssertionError("stopped queued job should not run")
+
+            try:
+                first = job_runner.run_job(
+                    store,
+                    execution_lock,
+                    "register",
+                    first_job,
+                    error_translator=str,
+                    cancelled_error_type=api_tasks.JobCancelledError,
+                )
+                self.assertTrue(first_started.wait(2))
+
+                queued = job_runner.run_job(
+                    store,
+                    execution_lock,
+                    "phone_direct",
+                    queued_job,
+                    error_translator=str,
+                    cancelled_error_type=api_tasks.JobCancelledError,
+                )
+
+                deadline = time.time() + 2
+                while time.time() < deadline:
+                    queued_state = next(job for job in store.list() if job["id"] == queued["job_id"])
+                    if "任务已排队" in queued_state["output"]:
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail("queued job did not enter the lock wait")
+
+                stop = store.request_stop(queued["job_id"])
+                self.assertTrue(stop["ok"])
+
+                deadline = time.time() + 1
+                while time.time() < deadline:
+                    queued_state = next(job for job in store.list() if job["id"] == queued["job_id"])
+                    if queued_state["status"] == "stopped":
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail(f"queued job stayed {queued_state['status']} until active job finished")
+
+                active_state = next(job for job in store.list() if job["id"] == first["job_id"])
+                self.assertEqual(active_state["status"], "running")
+            finally:
+                release_first.set()
+
     def test_job_store_marks_running_after_queue(self):
         store = api_tasks.JobStore()
         job_id = store.create("register")
@@ -4442,6 +4619,19 @@ class StabilityTests(unittest.TestCase):
             self.assertIn("已收到短信验证码：123456", jobs[0]["output"])
             self.assertEqual(jobs[0]["meta"]["stage"], "手机直注短信验证码已取到，已立即释放手机号")
             self.assertEqual(store.create("register"), "job-5")
+
+    def test_job_store_restores_queued_only_log_as_stopped_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir) / "jobs"
+            log_dir.mkdir(parents=True)
+            log_path = log_dir / "20260531-021851-job-4-phone_direct.log"
+            log_path.write_text("阶段：任务已排队，等待前一个任务完成\n", encoding="utf-8")
+            with patch.object(api_tasks, "LOG_DIR", Path(tmpdir)):
+                store = api_tasks.JobStore(restore=True)
+
+            job = store.list()[0]
+            self.assertEqual(job["status"], "stopped")
+            self.assertEqual(job["meta"]["stage"], "任务已停止")
 
     def test_job_store_restore_keeps_duplicate_old_job_ids(self):
         with tempfile.TemporaryDirectory() as tmpdir:

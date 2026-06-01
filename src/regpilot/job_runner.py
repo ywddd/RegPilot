@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import threading
-import time
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable, Type
@@ -59,6 +58,7 @@ def run_job(
     def target() -> None:
         stdout = JobOutputStream(jobs, job_id)
         log_tokens = set_log_context(task_id=job_id)
+        locked = False
         try:
             jobs.raise_if_stop_requested(job_id)
             # stdout/stderr redirection is process-global, and OAuth state can be
@@ -66,7 +66,9 @@ def run_job(
             locked = execution_lock.acquire(blocking=False)
             if not locked:
                 jobs.append_output(job_id, "阶段：任务已排队，等待前一个任务完成\n")
-                execution_lock.acquire()
+                while not locked:
+                    jobs.raise_if_stop_requested(job_id)
+                    locked = execution_lock.acquire(timeout=0.2)
             try:
                 jobs.raise_if_stop_requested(job_id)
                 jobs.mark_running(job_id)
@@ -74,7 +76,8 @@ def run_job(
                 with redirect_stdout(stdout), redirect_stderr(stdout):
                     result = func(*args, **kwargs)
             finally:
-                execution_lock.release()
+                if locked:
+                    execution_lock.release()
             stdout.flush()
             jobs.finish(job_id, result=result, output=_job_output_text())
         except cancelled_error_type as exc:
@@ -85,11 +88,7 @@ def run_job(
                 error=None,
                 output=_job_output_text(),
             )
-            with jobs._lock:
-                job = jobs._jobs.get(job_id)
-                if job:
-                    job["status"] = "stopped"
-                    job["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            jobs.mark_stopped(job_id)
         except Exception as exc:
             jobs.append_output(job_id, f"阶段：任务失败：{error_translator(exc)}\n")
             stdout.flush()

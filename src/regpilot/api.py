@@ -17,6 +17,7 @@ from .config import DATA_DIR, LOG_DIR
 from . import microsoft_mail_pool
 from .register_core import _decode_jwt_payload, auth_base, platform_oauth_client_id
 from .reauthorize import auto_reauthorize_account_with_email_otp, finish_account_reauthorize, start_account_reauthorize
+from .sms_provider_config import sms_api_key_from_values, sms_provider_from_values
 from .api_tasks import (
     JOBS,
     _hero_country_lookup,
@@ -127,6 +128,7 @@ class ReauthorizeAutoRequest(BaseModel):
     sms_api_key: str = ""
     hero_sms_api_key: str = ""
     smsbower_api_key: str = ""
+    fivesim_api_key: str = ""
     hero_sms_base_url: str = ""
     smsbower_base_url: str = ""
     hero_sms_country: str = ""
@@ -382,15 +384,19 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
         return default
 
     provider = _sms_provider_for_values({"sms_provider": pick("sms_provider", "hero_sms")})
-    api_key = str(pick("sms_api_key", "") or "").strip()
     hero_key = str(pick("hero_sms_api_key", "") or "").strip()
     bower_key = str(pick("smsbower_api_key", "") or "").strip()
-    if provider == "smsbower":
-        api_key = api_key or bower_key
-    elif provider == "5sim":
-        api_key = api_key or hero_key
-    else:
-        api_key = api_key or hero_key
+    fivesim_key = str(pick("fivesim_api_key", "") or "").strip()
+    api_key = sms_api_key_from_values(
+        {
+            "sms_provider": provider,
+            "sms_api_key": pick("sms_api_key", ""),
+            "hero_sms_api_key": hero_key,
+            "smsbower_api_key": bower_key,
+            "fivesim_api_key": fivesim_key,
+        },
+        provider,
+    )
     bounds = {
         "sms_wait_timeout": pick_renamed("sms_wait_timeout", "hero_sms_wait_timeout", 60),
         "sms_wait_interval": pick_renamed("sms_wait_interval", "hero_sms_wait_interval", 5),
@@ -416,6 +422,7 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
         "sms_api_key": api_key,
         "hero_sms_api_key": hero_key,
         "smsbower_api_key": bower_key,
+        "fivesim_api_key": fivesim_key,
         "hero_sms_base_url": str(pick("hero_sms_base_url", "") or "").strip(),
         "smsbower_base_url": str(pick("smsbower_base_url", "") or "").strip(),
         "hero_sms_country": (
@@ -454,23 +461,14 @@ def _has_any_target_import(values: dict[str, Any]) -> bool:
 
 def _sms_api_key_for_values(values: dict[str, Any]) -> str:
     provider = _sms_provider_for_values(values)
-    generic = str(values.get("sms_api_key") or "").strip()
-    if provider == "smsbower":
-        return str(values.get("smsbower_api_key") or generic or "").strip()
-    if provider == "5sim":
-        return str(generic or values.get("hero_sms_api_key") or "").strip()
-    return str(values.get("hero_sms_api_key") or generic or "").strip()
+    return sms_api_key_from_values(values, provider)
 
 
 def _sms_provider_for_values(values: dict[str, Any]) -> str:
-    raw = str(values.get("sms_provider") or values.get("phone_sms_provider") or "hero_sms").strip().lower().replace("-", "_")
-    if raw in {"5sim", "five_sim", "fivesim", "five"}:
-        return "5sim"
-    if raw in {"hero_sms", "herosms", "hero"}:
-        return "hero_sms"
-    if raw in {"smsbower", "sms_bower", "smsbower_page"}:
-        return "smsbower"
-    raise HTTPException(status_code=400, detail="invalid_sms_provider")
+    try:
+        return sms_provider_from_values(values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _positive_int_for_values(values: dict[str, Any], key: str, *, legacy_key: str = "") -> int:

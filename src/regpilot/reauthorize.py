@@ -15,8 +15,6 @@ from .json_store import write_json_atomic
 from .register_core import PlatformRegistrar, RegistrationResult, auth_base, wait_for_code, _response_json, extract_oauth_callback_params_from_consent_session, get_common_headers, _make_trace_headers, _registration_state_from_info, _decode_jwt_payload, build_sentinel_token, _random_name, _random_birthdate, _about_you_shape_log_summary, _accounts_error_code
 from .oauth_token_flow import (
     HeroSMSConfig,
-    SMSBOWER_BASE_URL,
-    FIVESIM_BASE_URL,
     Sub2APIOAuthFlowConfig,
     acquire_hero_sms_phone,
     build_openai_oauth_authorize_url,
@@ -35,6 +33,7 @@ from .oauth_token_flow import (
     _extract_form_inputs,
     _post_form_and_follow,
 )
+from .sms_provider_config import build_sms_config_from_values
 
 
 PHONE_REUSE_LIMIT = 3
@@ -1324,6 +1323,7 @@ def _build_reauthorize_sms_config(
     sms_api_key: str = "",
     hero_sms_api_key: str = "",
     smsbower_api_key: str = "",
+    fivesim_api_key: str = "",
     hero_sms_base_url: str = "",
     smsbower_base_url: str = "",
     hero_sms_country: str = "",
@@ -1338,56 +1338,27 @@ def _build_reauthorize_sms_config(
     sms_retry_count: int = 3,
     sms_auto_retry: bool = False,
 ) -> HeroSMSConfig:
-    provider = _normalize_sms_provider(sms_provider or "hero_sms")
-    key = str(sms_api_key or "").strip()
-    if not key:
-        key = str(smsbower_api_key if provider == "smsbower" else hero_sms_api_key or "").strip()
-    if not key and provider == "hero_sms":
-        key = str(hero_sms_api_key or "").strip()
-    if not key and provider == "smsbower":
-        key = str(smsbower_api_key or hero_sms_api_key or "").strip()
-    base_url = str(smsbower_base_url if provider == "smsbower" else hero_sms_base_url or "").strip()
-    if provider == "smsbower":
-        base_url = base_url or SMSBOWER_BASE_URL
-    elif provider == "5sim":
-        base_url = base_url or FIVESIM_BASE_URL
-        if "hero-sms.com" in base_url.lower() or "smsbower" in base_url.lower():
-            base_url = FIVESIM_BASE_URL
-    else:
-        base_url = base_url or "https://hero-sms.com/stubs/handler_api.php"
-    try:
-        min_price = float(hero_sms_min_price or 0)
-    except Exception:
-        min_price = 0.0
-    try:
-        max_price = float(hero_sms_max_price or 0)
-    except Exception:
-        max_price = 0.0
-    country = str(hero_sms_country or "").strip()
-    service = str(hero_sms_service or "").strip()
-    if provider == "5sim":
-        if not country or country.isdigit():
-            country = "england"
-        if not service or service == "dr":
-            service = "openai"
-    else:
-        country = country or "16"
-        service = service or "dr"
-    return HeroSMSConfig(
-        provider=provider,
-        api_key=key,
-        base_url=base_url,
-        country=country,
-        service=service,
-        min_price=min_price,
-        max_price=max_price,
-        wait_timeout=max(15, int(sms_wait_timeout or 60)),
-        wait_interval=max(1, int(sms_wait_interval or 5)),
-        resend_after_seconds=max(1, int(sms_resend_after_seconds or 30)),
-        timeout_after_resend_seconds=max(1, int(sms_timeout_after_resend_seconds or 60)),
-        release_after_seconds=max(15, int(sms_release_after_seconds or 120)),
-        max_retry_count=max(1, int(sms_retry_count or 3)),
-        auto_retry=bool(sms_auto_retry),
+    return build_sms_config_from_values(
+        {
+            "sms_provider": sms_provider,
+            "sms_api_key": sms_api_key,
+            "hero_sms_api_key": hero_sms_api_key,
+            "smsbower_api_key": smsbower_api_key,
+            "fivesim_api_key": fivesim_api_key,
+            "hero_sms_base_url": hero_sms_base_url,
+            "smsbower_base_url": smsbower_base_url,
+            "hero_sms_country": hero_sms_country,
+            "hero_sms_service": hero_sms_service,
+            "hero_sms_min_price": hero_sms_min_price,
+            "hero_sms_max_price": hero_sms_max_price,
+            "sms_wait_timeout": sms_wait_timeout,
+            "sms_wait_interval": sms_wait_interval,
+            "sms_resend_after_seconds": sms_resend_after_seconds,
+            "sms_timeout_after_resend_seconds": sms_timeout_after_resend_seconds,
+            "sms_release_after_seconds": sms_release_after_seconds,
+            "sms_retry_count": sms_retry_count,
+            "sms_auto_retry": sms_auto_retry,
+        }
     )
 
 
@@ -2409,6 +2380,7 @@ def auto_reauthorize_account_with_email_otp(
     sms_api_key: str = "",
     hero_sms_api_key: str = "",
     smsbower_api_key: str = "",
+    fivesim_api_key: str = "",
     hero_sms_base_url: str = "",
     smsbower_base_url: str = "",
     hero_sms_country: str = "",
@@ -2451,6 +2423,7 @@ def auto_reauthorize_account_with_email_otp(
         sms_api_key=sms_api_key,
         hero_sms_api_key=hero_sms_api_key,
         smsbower_api_key=smsbower_api_key,
+        fivesim_api_key=fivesim_api_key,
         hero_sms_base_url=hero_sms_base_url,
         smsbower_base_url=smsbower_base_url,
         hero_sms_country=hero_sms_country,
