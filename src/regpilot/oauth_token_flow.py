@@ -1410,6 +1410,8 @@ def acquire_hero_sms_phone(
             if value:
                 price = value
                 break
+    if not price and (not _is_smsbower_config(config)) and price_limit is not None and price_limit > 0:
+        price = f"≤{float(price_limit):.4f}"
     result = {"activation_id": activation_id, "phone_number": phone_number}
     if price:
         result["price"] = price

@@ -3212,6 +3212,27 @@ class SMSProviderTests(unittest.TestCase):
         self.assertEqual(calls[0]["maxPrice"], 0.027)
         self.assertEqual(result, {"activation_id": "act-1", "phone_number": "+15551234567"})
 
+    def test_hero_sms_acquire_phone_uses_max_price_when_response_has_no_price(self):
+        calls = []
+
+        def fake_request(_config, params):
+            calls.append(params)
+            return "ACCESS_NUMBER:act-1:15551234567"
+
+        config = flow.HeroSMSConfig(
+            provider="hero_sms",
+            api_key="k",
+            country="151",
+            max_price=0.023,
+        )
+
+        with patch.object(flow, "_hero_sms_request", side_effect=fake_request):
+            result = flow.acquire_hero_sms_phone(config)
+
+        self.assertEqual(calls[0]["action"], "getNumber")
+        self.assertEqual(calls[0]["maxPrice"], 0.023)
+        self.assertEqual(result, {"activation_id": "act-1", "phone_number": "+15551234567", "price": "≤0.0230"})
+
     def test_5sim_acquire_phone_uses_activation_endpoint(self):
         calls = []
 
