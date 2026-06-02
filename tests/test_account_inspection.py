@@ -335,8 +335,8 @@ class AccountInspectionTests(unittest.TestCase):
     def test_inspection_endpoint_starts_account_inspection_job(self):
         payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], sms_provider="hero_sms")
 
-        with patch("regpilot.api._prefer_reauthorize_sms_values", return_value={}), \
-             patch("regpilot.api._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
+        with patch("regpilot.api_account_inspection_routes._prefer_reauthorize_sms_values", return_value={}), \
+             patch("regpilot.api_account_inspection_routes._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
             result = fastapi_api.api_account_inspection_job(payload)
 
         self.assertEqual(result["job_id"], "job-1")

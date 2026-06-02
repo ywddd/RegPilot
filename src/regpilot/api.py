@@ -74,6 +74,11 @@ from .api_config_routes import (
     api_config,
     api_save_config,
 )
+from .api_account_inspection_routes import (
+    router as account_inspection_router,
+    api_account_inspection_cpa_action,
+    api_account_inspection_job,
+)
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _safe_account_with_status
 from .api_config_values import (
@@ -103,6 +108,7 @@ app.include_router(config_router)
 app.include_router(microsoft_mail_router)
 app.include_router(task_router)
 app.include_router(jobs_router)
+app.include_router(account_inspection_router)
 
 
 def main() -> None:
@@ -130,21 +136,6 @@ def index() -> str:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "service": "RegPilot API"}
-
-
-@app.post("/api/accounts/inspection/job")
-def api_account_inspection_job(payload: AccountInspectionRequest) -> dict[str, Any]:
-    sms_values = _prefer_reauthorize_sms_values(payload)
-
-    def run() -> dict[str, Any]:
-        return _run_account_inspection(payload, sms_values)
-
-    return _run_job("account_inspection", run)
-
-
-@app.post("/api/accounts/inspection/cpa-action")
-def api_account_inspection_cpa_action(payload: AccountInspectionCpaActionRequest) -> dict[str, Any]:
-    return _run_cpa_auth_action(payload)
 
 
 configure_account_inspection(
