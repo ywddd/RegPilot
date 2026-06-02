@@ -7,7 +7,6 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
 
 from .accounts_store import count_accounts, delete_account, delete_accounts, get_account, init_db, list_accounts, upsert_account
 from .config import DATA_DIR
@@ -24,6 +23,17 @@ from .api_tasks import (
     _run_register,
 )
 from .webui_html import FASTAPI_INDEX_HTML
+from .api_models import (
+    AccountDeleteRequest,
+    AccountUpsertRequest,
+    ConfigSaveRequest,
+    MicrosoftMailAccountRequest,
+    MicrosoftMailImportRequest,
+    ReauthorizeAutoRequest,
+    ReauthorizeFinishRequest,
+    ReauthorizeRequest,
+    TaskRunRequest,
+)
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _account_phone_status, _safe_account_with_status
 from .api_config_values import (
@@ -48,113 +58,6 @@ from .account_inspection import (
     _run_account_inspection,
     _run_cpa_auth_action,
 )
-
-
-
-
-class ConfigSaveRequest(BaseModel):
-    section: str = "register"
-    values: dict[str, Any] = Field(default_factory=dict)
-
-
-class TaskRunRequest(BaseModel):
-    section: str = "register"
-    values: dict[str, Any] = Field(default_factory=dict)
-
-
-class AccountUpsertRequest(BaseModel):
-    id: str = ""
-    email: str
-    password: str = ""
-    status: str = "active"
-    source: str = "manual"
-    callback_url: str = ""
-    access_token: str = ""
-    refresh_token: str = ""
-    id_token: str = ""
-    mailbox: dict[str, Any] = Field(default_factory=dict)
-    notes: str = ""
-    tags: list[str] = Field(default_factory=list)
-    usable_for_reauth: bool = True
-
-
-class AccountDeleteRequest(BaseModel):
-    ids: list[str] = Field(default_factory=list)
-
-
-class MicrosoftMailAccountRequest(BaseModel):
-    id: str = ""
-    email: str
-    password: str = ""
-    client_id: str = ""
-    refresh_token: str = ""
-    status: str = "authorized"
-    used: bool = False
-    alias_index: int = 0
-    alias_max: int = 5
-    notes: str = ""
-
-
-class MicrosoftMailImportRequest(BaseModel):
-    text: str = ""
-
-
-class ReauthorizeRequest(BaseModel):
-    account_id: str
-    proxy: str = ""
-
-
-class ReauthorizeFinishRequest(BaseModel):
-    account_id: str
-    callback_or_code: str
-    code_verifier: str
-    state: str = ""
-    redirect_uri: str = "http://localhost:1455/auth/callback"
-    client_id: str = ""
-    codex2api_url: str = ""
-    codex2api_admin_key: str = ""
-    codex2api_proxy_url: str = ""
-    proxy: str = ""
-
-
-class ReauthorizeAutoRequest(BaseModel):
-    account_id: str
-    codex2api_url: str = ""
-    codex2api_admin_key: str = ""
-    codex2api_proxy_url: str = ""
-    proxy: str = ""
-    wait_timeout: int = 60
-    wait_interval: int = 2
-    request_timeout: int = 30
-    sms_provider: str = ""
-    sms_api_key: str = ""
-    hero_sms_api_key: str = ""
-    smsbower_api_key: str = ""
-    fivesim_api_key: str = ""
-    hero_sms_base_url: str = ""
-    smsbower_base_url: str = ""
-    hero_sms_country: str = ""
-    hero_sms_service: str = ""
-    hero_sms_min_price: float | str = 0.0
-    hero_sms_max_price: float | str = 0.0
-    sms_wait_timeout: int | None = None
-    sms_wait_interval: int | None = None
-    sms_resend_after_seconds: int | None = None
-    sms_timeout_after_resend_seconds: int | None = None
-    sms_release_after_seconds: int | None = None
-    sms_auto_retry: bool | None = None
-    sms_retry_count: int | None = None
-    hero_sms_wait_timeout: int | None = None
-    hero_sms_wait_interval: int | None = None
-    hero_sms_resend_after_seconds: int | None = None
-    hero_sms_timeout_after_resend_seconds: int | None = None
-    hero_sms_release_after_seconds: int | None = None
-    hero_sms_auto_retry: bool | None = None
-    hero_sms_retry_count: int | None = None
-    allow_phone_verification: bool = False
-
-
-
 app = FastAPI(title="RegPilot API", version="0.1.0")
 
 
