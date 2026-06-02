@@ -97,9 +97,7 @@ from .api_config_values import (
 )
 from .account_inspection import (
     AccountInspectionCpaActionRequest,
-    AccountInspectionDeps,
     AccountInspectionRequest,
-    configure_account_inspection,
     _run_account_inspection,
     _run_cpa_auth_action,
 )
@@ -136,18 +134,6 @@ def index() -> str:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "service": "RegPilot API"}
-
-
-configure_account_inspection(
-    AccountInspectionDeps(
-        prefer_proxy=_prefer_proxy,
-        prefer_codex2api_url=_prefer_codex2api_url,
-        prefer_codex2api_admin_key=_prefer_codex2api_admin_key,
-        prefer_codex2api_proxy_url=_prefer_codex2api_proxy_url,
-        refresh_account_tokens=_refresh_account_tokens,
-        zh_job_message=_zh_job_message,
-    )
-)
 
 
 app.include_router(reauthorization_router)
