@@ -7,7 +7,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from .accounts_store import get_account, init_db
-from .config import DATA_DIR
 from . import microsoft_mail_pool
 from .api_tasks import (
     _hero_phone_bind,
@@ -70,6 +69,11 @@ from .api_jobs import (
     api_job_stop,
     api_jobs,
 )
+from .api_config_routes import (
+    router as config_router,
+    api_config,
+    api_save_config,
+)
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _safe_account_with_status
 from .api_config_values import (
@@ -95,6 +99,7 @@ from .account_inspection import (
     _run_cpa_auth_action,
 )
 app = FastAPI(title="RegPilot API", version="0.1.0")
+app.include_router(config_router)
 app.include_router(microsoft_mail_router)
 app.include_router(task_router)
 app.include_router(jobs_router)
@@ -120,30 +125,6 @@ def on_startup() -> None:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return FASTAPI_INDEX_HTML
-
-
-@app.get("/api/config")
-def api_config() -> dict[str, Any]:
-    return {"ok": True, "path": str(DATA_DIR / "webui_config.json"), "config": _load_webui_config()}
-
-
-@app.post("/api/config")
-def api_save_config(payload: ConfigSaveRequest) -> dict[str, Any]:
-    requested_section = str(payload.section or "register").strip() or "register"
-    if requested_section not in {"register", "phone_direct", "hero_phone_bind", "logs"}:
-        raise HTTPException(status_code=400, detail="invalid_config_section")
-    section = "hero_phone_bind" if requested_section == "phone_direct" else requested_section
-    data = _load_webui_config()
-    current = data.get(section) if isinstance(data.get(section), dict) else {}
-    merged = dict(current)
-    for key, value in (payload.values or {}).items():
-        merged[str(key)] = value
-    data[section] = merged
-    try:
-        saved = _save_webui_config(data)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "path": str(DATA_DIR / "webui_config.json"), "section": requested_section, "storage_section": section, "config": saved}
 
 
 @app.get("/api/health")
