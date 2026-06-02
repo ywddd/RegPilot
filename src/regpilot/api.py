@@ -27,12 +27,19 @@ from .api_models import (
     AccountDeleteRequest,
     AccountUpsertRequest,
     ConfigSaveRequest,
-    MicrosoftMailAccountRequest,
-    MicrosoftMailImportRequest,
     ReauthorizeAutoRequest,
     ReauthorizeFinishRequest,
     ReauthorizeRequest,
     TaskRunRequest,
+)
+from .api_microsoft_mail import (
+    router as microsoft_mail_router,
+    _safe_microsoft_mail_account,
+    api_clear_used_microsoft_mail_accounts,
+    api_delete_microsoft_mail_account,
+    api_import_microsoft_mail_accounts,
+    api_list_microsoft_mail_accounts,
+    api_upsert_microsoft_mail_account,
 )
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _account_phone_status, _safe_account_with_status
@@ -59,6 +66,7 @@ from .account_inspection import (
     _run_cpa_auth_action,
 )
 app = FastAPI(title="RegPilot API", version="0.1.0")
+app.include_router(microsoft_mail_router)
 
 
 def main() -> None:
@@ -110,45 +118,6 @@ def api_save_config(payload: ConfigSaveRequest) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "service": "RegPilot API"}
-
-
-def _safe_microsoft_mail_account(item: dict[str, Any]) -> dict[str, Any]:
-    out = dict(item)
-    if out.get("password"):
-        out["password"] = "***"
-    if out.get("refresh_token"):
-        out["refresh_token"] = "***"
-    return out
-
-
-@app.get("/api/microsoft-mail/accounts")
-def api_list_microsoft_mail_accounts() -> dict[str, Any]:
-    items = microsoft_mail_pool.list_accounts()
-    return {"ok": True, "items": [_safe_microsoft_mail_account(item) for item in items], "total": len(items)}
-
-
-@app.post("/api/microsoft-mail/accounts")
-def api_upsert_microsoft_mail_account(payload: MicrosoftMailAccountRequest) -> dict[str, Any]:
-    item = microsoft_mail_pool.upsert_account(payload.model_dump())
-    return {"ok": True, "item": _safe_microsoft_mail_account(item)}
-
-
-@app.post("/api/microsoft-mail/import")
-def api_import_microsoft_mail_accounts(payload: MicrosoftMailImportRequest) -> dict[str, Any]:
-    return {"ok": True, **microsoft_mail_pool.import_accounts(payload.text)}
-
-
-@app.post("/api/microsoft-mail/clear-used")
-def api_clear_used_microsoft_mail_accounts() -> dict[str, Any]:
-    return {"ok": True, "count": microsoft_mail_pool.clear_used()}
-
-
-@app.delete("/api/microsoft-mail/accounts/{account_id}")
-def api_delete_microsoft_mail_account(account_id: str) -> dict[str, Any]:
-    ok = microsoft_mail_pool.delete_account(account_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="microsoft_mail_account_not_found")
-    return {"ok": True, "id": account_id}
 
 
 @app.get("/api/accounts")
