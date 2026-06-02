@@ -25,6 +25,13 @@ Implemented capabilities:
 - Result persistence in `data/last_result.json`
 - CPA callback submission and account import helpers
 - Existing account reauthorization with email OTP and optional phone verification
+- Account inspection for CPA Codex auth files:
+  - probes Codex usage through the CPA management `/api-call` endpoint
+  - suggests enabling disabled accounts when weekly quota is available
+  - suggests disabling accounts when weekly quota is exhausted
+  - reauthorizes 401 accounts automatically, with the reauthorization step serialized to reduce risk-control pressure
+  - marks accounts that require manual phone second verification as pending deletion
+  - supports one-click execution of suggested CPA actions
 
 ## Installation
 
@@ -176,6 +183,13 @@ When changing environment variables or source files in Docker, rebuild/recreate 
 docker compose up -d --build
 ```
 
+If both compose files are present, prefer the explicit YAML file used by the current deployment:
+
+```bash
+docker compose -f docker-compose.yaml up -d --build
+docker compose -f docker-compose.yaml ps
+```
+
 ### Upgrade
 
 For a Python virtual environment install:
@@ -198,7 +212,7 @@ For Docker:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose -f docker-compose.yaml up -d --build
 ```
 
 ### Runtime Files
@@ -245,6 +259,32 @@ The API scripts support these environment variables:
 - `REGPILOT_PORT`: bind port, defaults to `8766`
 - `PYTHON_BIN`: Python executable, defaults to `python3`
 - `REGPILOT_VENV`: virtual environment directory; defaults to `.venv-linux312`, `.venv-linux`, `.venv_linux`, then `.venv`
+
+## WebUI Workflows
+
+Open the WebUI at:
+
+```text
+http://127.0.0.1:8766/
+```
+
+Main pages:
+
+- Account registration: configure proxy, mailbox, SMS provider, CPA address, and CPA management key; start registration and phone-binding jobs.
+- Account pool: manage stored accounts, batch reauthorize, delete, and export account tokens.
+- Account inspection: inspect CPA Codex auth files with the registration-page CPA settings, review only accounts that need action, and execute suggested enable/disable/delete operations.
+- Unified logs: inspect job output across registration, reauthorization, phone binding, and account inspection.
+
+Account inspection notes:
+
+- The inspection page reads the CPA address, CPA management key, and CPA OAuth proxy from the registration configuration.
+- The thread count controls CPA usage probing concurrency.
+- CPA usage probing uses `https://chatgpt.com/backend-api/wham/usage` through the CPA management `/api-call` endpoint.
+- If a CPA auth file returns 401 and a matching local account exists, RegPilot attempts automatic reauthorization.
+- Reauthorization is serialized during inspection even when probing uses multiple threads. This keeps the feature automatic while avoiding multiple simultaneous OpenAI authorization flows.
+- Accounts that still require manual phone second verification after reauthorization are marked pending deletion.
+- Deleting a CPA auth file from the inspection page also deletes the matching local account from the RegPilot account pool when an account id is available.
+- One-click suggested actions show a final execution summary and hide successfully processed rows from the current inspection list.
 
 ## Config Example
 
