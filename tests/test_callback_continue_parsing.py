@@ -1762,7 +1762,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
             "hero_phone_bind": {"sms_auto_retry": False, "hero_sms_country": "151"},
         }
 
-        with patch("regpilot.api._load_webui_config", return_value=saved):
+        with patch("regpilot.api_config_values._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values("hero_phone_bind", {"hero_sms_api_key": "k"})
 
         self.assertIs(merged["sms_auto_retry"], False)
@@ -1773,7 +1773,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
     def test_fastapi_phone_bind_respects_explicit_auto_retry_false(self):
         saved = {"hero_phone_bind": {"sms_auto_retry": True}}
 
-        with patch("regpilot.api._load_webui_config", return_value=saved):
+        with patch("regpilot.api_config_values._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values("hero_phone_bind", {"sms_auto_retry": False})
 
         self.assertIs(merged["sms_auto_retry"], False)
@@ -1781,7 +1781,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
     def test_fastapi_phone_bind_respects_explicit_retry_count(self):
         saved = {"hero_phone_bind": {"sms_auto_retry": False, "sms_retry_count": 3}}
 
-        with patch("regpilot.api._load_webui_config", return_value=saved):
+        with patch("regpilot.api_config_values._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values(
                 "hero_phone_bind",
                 {"sms_auto_retry": True, "sms_retry_count": 5},
@@ -1889,7 +1889,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
     def test_fastapi_task_merge_allows_explicit_empty_to_clear_saved_value(self):
         saved = {"register": {"mail_type": "cloudflare-temp-email", "cf_temp_admin_auth": "saved-key"}}
 
-        with patch("regpilot.api._load_webui_config", return_value=saved):
+        with patch("regpilot.api_config_values._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values("register", {"cf_temp_admin_auth": ""})
 
         self.assertEqual(merged["cf_temp_admin_auth"], "")
@@ -3415,7 +3415,7 @@ class SMSProviderTests(unittest.TestCase):
     def test_cpa_oauth_proxy_does_not_fallback_to_register_proxy(self):
         saved = {"register": {"proxy": "http://127.0.0.1:7890", "codex2api_proxy_url": ""}}
 
-        with patch("regpilot.api._load_webui_config", return_value=saved):
+        with patch("regpilot.api_config_values._load_webui_config", return_value=saved):
             proxy_url = fastapi_api._prefer_codex2api_proxy_url("")
 
         self.assertEqual(proxy_url, "")
@@ -3546,7 +3546,7 @@ class ApiAccountSafetyTests(unittest.TestCase):
         account["email"] = "ocdemo@19971109.xyz"
         account["mailbox"] = {"bind_email": "ocdemo@19971109.xyz"}
 
-        with patch("regpilot.api._load_webui_config", return_value={"register": {"cf_temp_domain": "19971109.xyz"}}):
+        with patch("regpilot.api_config_values._load_webui_config", return_value={"register": {"cf_temp_domain": "19971109.xyz"}}):
             safe = fastapi_api._safe_account_with_status(account)
 
         self.assertEqual(safe["mail_provider"], "cloudflare-temp-email")
@@ -3913,7 +3913,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -3924,7 +3924,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"hero_sms_api_key": "sms-key", "sms_provider": "hero_sms"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -3943,7 +3943,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -4026,7 +4026,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -4044,7 +4044,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1", sms_provider="smsbwoer", hero_sms_api_key="sms-key")
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_reauthorize_auto_job(payload)
 
@@ -4150,7 +4150,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"mail_type": "unknown-mail"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4168,7 +4168,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4185,7 +4185,7 @@ class StabilityTests(unittest.TestCase):
             }
         )
 
-        with patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+        with patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
             result = fastapi_api.api_task_register(payload)
 
@@ -4201,7 +4201,7 @@ class StabilityTests(unittest.TestCase):
             }
         )
 
-        with patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+        with patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch.object(fastapi_api.microsoft_mail_pool, "count_available", return_value=1), \
              patch("regpilot.api._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
             result = fastapi_api.api_task_register(payload)
@@ -4219,7 +4219,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch.object(fastapi_api.microsoft_mail_pool, "count_available", return_value=0), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
@@ -4231,7 +4231,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"mail_type": "icloud", "icloud_email": "alias@icloud.com"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4242,7 +4242,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"mail_type": "unknown-mail", "cf_temp_admin_auth": "key"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4254,7 +4254,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"mail_type": "cloudflare-temp-email", "cf_temp_base_url": "https://mail.example.test", "cf_temp_admin_auth": "key", "cf_temp_domain": "example.test", "total": "abc"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4266,7 +4266,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"mail_type": "cloudflare-temp-email", "cf_temp_base_url": "https://mail.example.test", "cf_temp_admin_auth": "key", "cf_temp_domain": "example.test", "total": "1.5"})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4279,7 +4279,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
@@ -4296,7 +4296,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -4318,7 +4318,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -4339,7 +4339,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
@@ -4356,7 +4356,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_price(payload)
 
@@ -4367,7 +4367,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.TaskRunRequest(values={"sms_provider": "smsbower", "smsbower_api_key": ""})
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._hero_country_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_countries(payload)
 
@@ -4385,7 +4385,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
+             patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
              patch("regpilot.api._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_price(payload)
 
@@ -4396,7 +4396,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
 
         with patch(
-            "regpilot.api._load_webui_config",
+            "regpilot.api_config_values._load_webui_config",
             return_value={
                 "register": {},
                 "hero_phone_bind": {
@@ -4414,7 +4414,7 @@ class StabilityTests(unittest.TestCase):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
 
         with patch(
-            "regpilot.api._load_webui_config",
+            "regpilot.api_config_values._load_webui_config",
             return_value={
                 "register": {},
                 "hero_phone_bind": {
@@ -4436,7 +4436,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch(
-                 "regpilot.api._load_webui_config",
+                 "regpilot.api_config_values._load_webui_config",
                  return_value={
                      "register": {},
                      "hero_phone_bind": {
